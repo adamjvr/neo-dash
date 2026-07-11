@@ -1,0 +1,13 @@
+[package]
+name = "neodash-exec"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+neodash-core = { path = "../neodash-core" }
+thiserror.workspace = true
+tracing.workspace = true

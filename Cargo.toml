@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/neodash-core",
+    "crates/neodash-exec",
+    "crates/neodash-tail",
+    "crates/neodash-platform",
+    "crates/neodash-renderer",
+    "crates/neodash-daemon",
+    "crates/neodash-cli",
+    "crates/neodash-app",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MPL-2.0"
+authors = ["Adam Vadala-Roth"]
+repository = "https://github.com/adamjvr/neodash"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# GUI dependencies are intentionally isolated in neodash-app.
+# The default workspace build stays mostly pure Rust logic, while the GUI crate
+# binds to native Linux libraries through Rust crates when enabled.
+gtk = { version = "0.11", package = "gtk4" }
+adw = { version = "0.9", package = "libadwaita" }
+gtk4-layer-shell = "0.8"

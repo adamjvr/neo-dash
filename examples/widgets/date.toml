@@ -1,0 +1,31 @@
+id = "date-clock"
+name = "Date Clock"
+type = "shell"
+enabled = true
+
+[source]
+command = "date '+%Y-%m-%d %H:%M:%S'"
+shell = "/bin/bash"
+interval_ms = 1000
+timeout_ms = 800
+show_stderr = false
+parse_ansi = true
+
+[geometry]
+monitor = "primary"
+x = 40
+y = 40
+width = 420
+height = 80
+anchor = "top-left"
+layer = "background"
+click_through = true
+
+[style]
+font_family = "JetBrains Mono"
+font_size = 18
+foreground = "#eeeeee"
+background = "#00000088"
+opacity = 1.0
+padding = 12
+border_radius = 8

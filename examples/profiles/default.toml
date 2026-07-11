@@ -1,0 +1,7 @@
+id = "default"
+name = "Default"
+enabled = true
+
+[[widgets]]
+id = "date-clock"
+path = "../widgets/date.toml"
