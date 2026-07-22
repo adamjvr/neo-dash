@@ -65,7 +65,7 @@ mod gui {
     use clap::Parser;
     use gtk::glib;
     use gtk::prelude::*;
-    use neodash_core::{WidgetConfig, WidgetType};
+    use neodash_core::{GeometryConfig, WidgetConfig, WidgetType};
     use neodash_exec::run_shell_command_once;
     use neodash_platform::detect_backend_from_env;
     use neodash_runtime::load_widget_from_path;
@@ -265,7 +265,7 @@ mod gui {
 
         window.present();
 
-        schedule_desktop_hints(options.desktop_hints, window_title);
+        schedule_desktop_hints(options.desktop_hints, window_title, widget.geometry.clone());
 
         let label = Rc::new(label);
         let last_output = Rc::new(RefCell::new(String::new()));
@@ -288,15 +288,23 @@ mod gui {
         });
     }
 
-    /// Apply desktop-hint behavior after GTK has had a moment to realize/map the
-    /// native window.
+    /// Apply desktop-widget behavior after GTK has had a moment to realize/map
+    /// the native window.
     ///
     /// GTK exposes a high-level cross-platform window API. The X11 desktop hints
-    /// are lower-level EWMH properties on the native X11 window. For this first
-    /// X11 pass, we find the X11 window by its unique title after presentation.
-    /// It is slightly hacky, but it keeps the dependency optional and keeps the
-    /// GTK renderer independent from X11-specific code.
-    fn schedule_desktop_hints(enabled: bool, window_title: String) {
+    /// and X/Y placement are lower-level X11/EWMH operations on the native X11
+    /// window.
+    ///
+    /// For this development pass, we find the X11 window by its unique title
+    /// after presentation. That is still a temporary seam, but now the backend
+    /// operation has enough data to apply the widget's configured geometry too.
+    ///
+    /// Future cleanup target:
+    ///
+    /// - split X11 behavior out of `neodash-app`
+    /// - expose a real platform surface API from `neodash-platform`
+    /// - pass a native window handle instead of title-searching
+    fn schedule_desktop_hints(enabled: bool, window_title: String, geometry: GeometryConfig) {
         if !enabled {
             return;
         }
@@ -304,18 +312,22 @@ mod gui {
         #[cfg(feature = "x11-desktop")]
         {
             glib::timeout_add_local(Duration::from_millis(250), move || {
-                match x11_desktop::apply_desktop_widget_hints(&window_title) {
+                match x11_desktop::apply_desktop_widget_behavior(&window_title, &geometry) {
                     Ok(()) => {
                         tracing::info!(
                             window_title = %window_title,
-                            "applied X11 desktop-widget hints"
+                            x = geometry.x,
+                            y = geometry.y,
+                            width = geometry.width,
+                            height = geometry.height,
+                            "applied X11 desktop-widget hints and geometry"
                         );
                     }
                     Err(error) => {
                         tracing::warn!(
                             window_title = %window_title,
                             error = %error,
-                            "failed to apply X11 desktop-widget hints"
+                            "failed to apply X11 desktop-widget behavior"
                         );
                     }
                 }
@@ -327,6 +339,7 @@ mod gui {
         #[cfg(not(feature = "x11-desktop"))]
         {
             let _ = window_title;
+            let _ = geometry;
 
             tracing::warn!(
                 "desktop hints requested, but neodash-app was built without the x11-desktop feature"
@@ -480,13 +493,22 @@ mod gui {
 
     #[cfg(feature = "x11-desktop")]
     mod x11_desktop {
+        use neodash_core::GeometryConfig;
         use x11rb::{
             connection::Connection,
-            protocol::xproto::{Atom, AtomEnum, ConnectionExt, PropMode, Window},
+            protocol::xproto::{
+                Atom, AtomEnum, ConfigureWindowAux, ConnectionExt, PropMode, Window,
+            },
             rust_connection::RustConnection,
             wrapper::ConnectionExt as _,
         };
 
+        /// X11 atoms used by the temporary X11 preview backend.
+        ///
+        /// These are mostly EWMH window-manager properties. Window managers are
+        /// allowed to interpret some of them differently, so NeoDash treats this
+        /// as a best-effort desktop-widget behavior pass rather than a hard
+        /// guarantee.
         struct X11Atoms {
             net_wm_name: Atom,
             utf8_string: Atom,
@@ -516,13 +538,28 @@ mod gui {
             }
         }
 
-        /// Apply EWMH hints that make a normal X11 window behave more like a
-        /// desktop widget.
+        /// Apply the current X11 desktop-widget behavior.
         ///
-        /// This is a best-effort development implementation. Window managers may
-        /// interpret some hints differently. That is fine for this iteration; the
-        /// point is to prove the X11 direction without polluting the GTK renderer.
-        pub fn apply_desktop_widget_hints(window_title: &str) -> anyhow::Result<()> {
+        /// This does two things:
+        ///
+        /// 1. Applies EWMH hints:
+        ///    - skip taskbar
+        ///    - skip pager
+        ///    - sticky/all workspaces
+        ///    - below normal windows
+        ///
+        /// 2. Applies configured geometry:
+        ///    - x
+        ///    - y
+        ///    - width
+        ///    - height
+        ///
+        /// The title-search lookup is temporary. It works well enough for this
+        /// preview, but the final backend should use a real native window handle.
+        pub fn apply_desktop_widget_behavior(
+            window_title: &str,
+            geometry: &GeometryConfig,
+        ) -> anyhow::Result<()> {
             let (connection, screen_number) = RustConnection::connect(None)?;
             let screen = &connection.setup().roots[screen_number];
             let root = screen.root;
@@ -533,6 +570,21 @@ mod gui {
                     anyhow::anyhow!("could not find X11 window titled {window_title:?}")
                 })?;
 
+            apply_state_hints(&connection, window, &atoms)?;
+            apply_geometry(&connection, window, geometry)?;
+
+            connection.flush()?;
+
+            Ok(())
+        }
+
+        /// Apply EWMH state properties that make the window behave more like a
+        /// desktop widget than a normal application window.
+        fn apply_state_hints<C: Connection>(
+            connection: &C,
+            window: Window,
+            atoms: &X11Atoms,
+        ) -> anyhow::Result<()> {
             let states = [
                 atoms.net_wm_state_skip_taskbar,
                 atoms.net_wm_state_skip_pager,
@@ -557,7 +609,31 @@ mod gui {
                 &[u32::MAX],
             )?;
 
-            connection.flush()?;
+            Ok(())
+        }
+
+        /// Apply the geometry from the widget TOML file to the X11 window.
+        ///
+        /// GTK4 no longer exposes simple global-coordinate window positioning.
+        /// On X11, however, a backend can still request placement through the X
+        /// server. Window managers may adjust the final position, but this gives
+        /// NeoDash the correct direction for X11 desktop widgets.
+        fn apply_geometry<C: Connection>(
+            connection: &C,
+            window: Window,
+            geometry: &GeometryConfig,
+        ) -> anyhow::Result<()> {
+            let width = geometry.width.max(1) as u32;
+            let height = geometry.height.max(1) as u32;
+
+            connection.configure_window(
+                window,
+                &ConfigureWindowAux::new()
+                    .x(geometry.x)
+                    .y(geometry.y)
+                    .width(width)
+                    .height(height),
+            )?;
 
             Ok(())
         }
