@@ -56,7 +56,7 @@ That gives us simple GeekTool behavior first while leaving room for Rainmeter/Co
 First proof:
 
 ```bash
-neodash run --command "date" --interval 1000
+neodash run --command "date" --interval 1000 --watch
 ```
 
 Then the first real graphical milestone:
@@ -96,6 +96,7 @@ Implemented in this starter:
 - Shell command runner skeleton
 - Daemon crate skeleton
 - CLI crate skeleton
+- Headless runtime crate for one-shot and watched shell widgets
 - App/GUI crate skeleton
 - Optional GUI dependencies so the default workspace stays headless-buildable
 - Headless check script and GitHub Actions CI
@@ -167,7 +168,9 @@ From repo root:
 
 ```bash
 ./scripts/check_headless.sh
-cargo run -p neodash-cli -- run --command "date" --interval 1000
+cargo run -p neodash-cli -- run --command "date" --interval 1000 --watch
+cargo run -p neodash-cli -- run-widget examples/widgets/date.toml
+cargo run -p neodash-cli -- run-widget examples/widgets/date.toml --once
 cargo run -p neodash-cli -- backend
 cargo run -p neodash-cli -- example-widget
 ```

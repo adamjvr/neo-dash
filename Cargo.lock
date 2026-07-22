@@ -665,6 +665,7 @@ dependencies = [
  "neodash-core",
  "neodash-exec",
  "neodash-platform",
+ "neodash-runtime",
  "tracing",
  "tracing-subscriber",
 ]
@@ -716,6 +717,15 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "neodash-core",
+]
+
+[[package]]
+name = "neodash-runtime"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "neodash-core",
+ "neodash-exec",
 ]
 
 [[package]]

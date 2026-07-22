@@ -6,6 +6,7 @@ members = [
     "crates/neodash-tail",
     "crates/neodash-platform",
     "crates/neodash-renderer",
+    "crates/neodash-runtime",
     "crates/neodash-daemon",
     "crates/neodash-cli",
     "crates/neodash-app",
@@ -15,7 +16,7 @@ members = [
 edition = "2021"
 license = "MPL-2.0"
 authors = ["Adam Vadala-Roth"]
-repository = "https://github.com/adamjvr/neodash"
+repository = "https://github.com/adamjvr/neo-dash"
 
 [workspace.dependencies]
 anyhow = "1"
