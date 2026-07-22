@@ -1,0 +1,31 @@
+id = "uptime-status"
+name = "Uptime Status"
+type = "shell"
+enabled = true
+
+[source]
+command = "uptime"
+shell = "/bin/bash"
+interval_ms = 5000
+timeout_ms = 1200
+show_stderr = false
+parse_ansi = true
+
+[geometry]
+monitor = "primary"
+x = 40
+y = 190
+width = 620
+height = 100
+anchor = "top-left"
+layer = "background"
+click_through = true
+
+[style]
+font_family = "monospace"
+font_size = 13
+foreground = "#eeeeee"
+background = "#00000088"
+opacity = 1.0
+padding = 8
+border_radius = 0

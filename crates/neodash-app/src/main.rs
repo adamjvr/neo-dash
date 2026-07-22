@@ -84,8 +84,12 @@ mod gui {
     #[command(about = "NeoDash graphical widget preview")]
     struct Cli {
         /// Widget TOML file to preview.
-        #[arg(long)]
-        widget: PathBuf,
+        ///
+        /// May be repeated:
+        ///
+        ///   --widget examples/widgets/date.toml --widget examples/widgets/uptime.toml
+        #[arg(long = "widget", value_name = "FILE", required = true)]
+        widgets: Vec<PathBuf>,
 
         /// Show normal window-manager decorations.
         #[arg(long, default_value_t = false)]
@@ -131,9 +135,6 @@ mod gui {
         tracing_subscriber::fmt().with_env_filter("info").init();
 
         let cli = Cli::parse();
-        let widget = load_widget_from_path(&cli.widget)?;
-
-        validate_preview_widget(&widget)?;
 
         let options = PreviewOptions {
             decorated: cli.decorated,
@@ -143,14 +144,39 @@ mod gui {
             desktop_hints: cli.desktop_hints,
         };
 
+        let mut widgets = Vec::new();
+
+        for widget_path in &cli.widgets {
+            let widget = load_widget_from_path(widget_path)?;
+
+            validate_preview_widget(&widget)?;
+
+            tracing::info!(
+                path = %widget_path.display(),
+                widget_id = %widget.id.0,
+                widget_name = %widget.name,
+                "loaded NeoDash preview widget"
+            );
+
+            widgets.push(Rc::new(widget));
+        }
+
+        let widgets = Rc::new(widgets);
+
+        tracing::info!(
+            widget_count = widgets.len(),
+            desktop_hints = options.desktop_hints,
+            "loaded NeoDash preview widget set"
+        );
+
         let app = gtk::Application::builder()
             .application_id("io.github.adamjvr.NeoDash")
             .build();
 
-        let widget = Rc::new(widget);
-
         app.connect_activate(move |app| {
-            build_widget_window(app, Rc::clone(&widget), options);
+            for widget in widgets.iter() {
+                build_widget_window(app, Rc::clone(widget), options);
+            }
         });
 
         // GTK/GApplication also tries to parse process arguments when `run()` is
