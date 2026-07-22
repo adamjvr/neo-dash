@@ -6,7 +6,7 @@
 //    This keeps CI, headless systems, and distro build sanity checks simple.
 //
 // 2. The `gui` feature build.
-//    This enables the first real GTK4 widget preview window.
+//    This enables the GTK4 widget preview window.
 //
 // The important architectural choice here is that the default app target does
 // not drag GTK into the entire workspace. NeoDash's core model, command runtime,
@@ -44,6 +44,7 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("Run:");
     println!("  cargo run -p neodash-app --features gui -- --widget examples/widgets/date.toml");
+    println!();
 
     Ok(())
 }
@@ -64,19 +65,14 @@ mod gui {
     use neodash_runtime::load_widget_from_path;
     use std::{cell::RefCell, path::PathBuf, rc::Rc, time::Duration};
 
-    /// Command line arguments for the first graphical NeoDash preview.
+    /// Command line arguments for the graphical NeoDash widget preview.
     ///
-    /// This is intentionally not the full visual editor yet.
+    /// This is still not the full visual editor.
     ///
-    /// The first GUI milestone is:
-    ///
-    /// - load one widget TOML file
-    /// - run its shell command repeatedly
-    /// - display the output in a native GTK label
-    /// - use the geometry/style values that already exist in the config model
-    ///
-    /// Once this works, the next layer can make the window behave like a true
-    /// desktop widget on X11 and Wayland.
+    /// The preview app is the bridge between the proven headless runtime and the
+    /// future desktop-widget surface. It loads one widget TOML file, renders the
+    /// shell output in a native GTK4 window, and refreshes on the widget's
+    /// configured interval.
     #[derive(Debug, Parser)]
     #[command(name = "neodash-app")]
     #[command(about = "NeoDash graphical widget preview")]
@@ -84,6 +80,45 @@ mod gui {
         /// Widget TOML file to preview.
         #[arg(long)]
         widget: PathBuf,
+
+        /// Show normal window-manager decorations.
+        ///
+        /// The default is undecorated because NeoDash widgets should eventually
+        /// feel like desktop objects, not normal app windows. During development,
+        /// decorations are useful because they give you normal close/move/resize
+        /// controls from the window manager.
+        #[arg(long, default_value_t = false)]
+        decorated: bool,
+
+        /// Allow the preview window to be resized by the window manager.
+        ///
+        /// The default is false so the preview respects the widget geometry in
+        /// the TOML file. Enable this when testing wrapping, padding, font size,
+        /// and general layout behavior.
+        #[arg(long, default_value_t = false)]
+        resizable: bool,
+
+        /// Disable Escape-to-close.
+        ///
+        /// Escape-to-close is enabled by default because the window is normally
+        /// undecorated. This flag exists for input/focus testing later.
+        #[arg(long, default_value_t = false)]
+        no_escape_close: bool,
+
+        /// Draw a visible border around the widget frame.
+        ///
+        /// This is a development aid. It makes it easier to see the actual GTK
+        /// box allocation when tuning padding, transparency, and window size.
+        #[arg(long, default_value_t = false)]
+        debug_frame: bool,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct PreviewOptions {
+        decorated: bool,
+        resizable: bool,
+        close_on_escape: bool,
+        debug_frame: bool,
     }
 
     pub fn run() -> anyhow::Result<()> {
@@ -94,6 +129,13 @@ mod gui {
 
         validate_preview_widget(&widget)?;
 
+        let options = PreviewOptions {
+            decorated: cli.decorated,
+            resizable: cli.resizable,
+            close_on_escape: !cli.no_escape_close,
+            debug_frame: cli.debug_frame,
+        };
+
         let app = gtk::Application::builder()
             .application_id("io.github.adamjvr.NeoDash")
             .build();
@@ -101,17 +143,15 @@ mod gui {
         let widget = Rc::new(widget);
 
         app.connect_activate(move |app| {
-            build_widget_window(app, Rc::clone(&widget));
+            build_widget_window(app, Rc::clone(&widget), options);
         });
 
-        // GTK/GApplication also tries to parse process arguments when `run()`
-        // is called. We already parsed NeoDash-specific arguments with Clap
-        // above, so passing the real argv through again makes GTK complain about
-        // options like `--widget`.
+        // GTK/GApplication also tries to parse process arguments when `run()` is
+        // called. Clap already parsed NeoDash-specific arguments above, so the
+        // real argv would make GTK complain about options like `--widget`.
         //
-        // Use a sanitized argv containing only the program name. This keeps
-        // Clap in charge of NeoDash CLI options and GTK in charge of the app
-        // lifecycle.
+        // Keep Clap in charge of NeoDash arguments and feed GTK a sanitized argv
+        // containing only a program name.
         app.run_with_args::<&str>(&["neodash-app"]);
 
         Ok(())
@@ -148,7 +188,7 @@ mod gui {
         Ok(())
     }
 
-    /// Build the first real NeoDash window.
+    /// Build the current NeoDash GTK preview window.
     ///
     /// This is deliberately plain GTK4.
     ///
@@ -157,9 +197,22 @@ mod gui {
     /// It does not use libadwaita yet.
     ///
     /// That restraint matters: we are proving the renderer first. Once a normal
-    /// native GTK window can show a live widget, we can wrap that window with
-    /// backend-specific X11 or Wayland behavior.
-    fn build_widget_window(app: &gtk::Application, widget: Rc<WidgetConfig>) {
+    /// native GTK window can show a live widget reliably, the next backend pass
+    /// can wrap that window with X11-specific or Wayland layer-shell behavior.
+    ///
+    /// Geometry note:
+    ///
+    /// We use `geometry.width` and `geometry.height` here, but not `geometry.x`
+    /// and `geometry.y` yet. GTK4 removed the old global-coordinate window move
+    /// APIs. Exact desktop placement belongs in:
+    ///
+    /// - X11 backend code for X11 sessions
+    /// - layer-shell backend code for supported Wayland compositors
+    fn build_widget_window(
+        app: &gtk::Application,
+        widget: Rc<WidgetConfig>,
+        options: PreviewOptions,
+    ) {
         let backend = detect_backend_from_env();
 
         tracing::info!(
@@ -167,6 +220,10 @@ mod gui {
             reason = %backend.reason,
             widget_id = %widget.id.0,
             widget_name = %widget.name,
+            decorated = options.decorated,
+            resizable = options.resizable,
+            close_on_escape = options.close_on_escape,
+            debug_frame = options.debug_frame,
             "opening NeoDash widget preview"
         );
 
@@ -179,6 +236,11 @@ mod gui {
 
         let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
         frame.add_css_class("neodash-widget-frame");
+
+        if options.debug_frame {
+            frame.add_css_class("neodash-debug-frame");
+        }
+
         frame.set_margin_top(widget.style.padding as i32);
         frame.set_margin_bottom(widget.style.padding as i32);
         frame.set_margin_start(widget.style.padding as i32);
@@ -190,14 +252,17 @@ mod gui {
             .title(&widget.name)
             .default_width(widget.geometry.width)
             .default_height(widget.geometry.height)
-            .decorated(false)
+            .decorated(options.decorated)
+            .resizable(options.resizable)
             .child(&frame)
             .build();
 
+        if options.close_on_escape {
+            install_escape_to_close(&window);
+        }
+
         install_widget_css(&widget);
 
-        // Since this first preview window is undecorated, the easiest close path
-        // during development is Ctrl+C in the terminal that launched it.
         window.present();
 
         let label = Rc::new(label);
@@ -219,6 +284,30 @@ mod gui {
             );
             glib::ControlFlow::Continue
         });
+    }
+
+    /// Add Escape-to-close support to the preview window.
+    ///
+    /// Undecorated windows are cool for a desktop-widget preview, but they are
+    /// annoying if there is no obvious way to close them. Escape keeps the
+    /// development loop fast without forcing normal titlebar decorations.
+    fn install_escape_to_close(window: &gtk::ApplicationWindow) {
+        let controller = gtk::EventControllerKey::new();
+        let weak_window = window.downgrade();
+
+        controller.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                if let Some(window) = weak_window.upgrade() {
+                    window.close();
+                }
+
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+
+        window.add_controller(controller);
     }
 
     /// Run one command frame and update the visible label.
@@ -282,8 +371,8 @@ mod gui {
 
     /// Install minimal CSS generated from `StyleConfig`.
     ///
-    /// GTK CSS does not reliably accept every CSS color syntax that browsers do,
-    /// so `css_color` converts NeoDash's default #RRGGBBAA color into rgba().
+    /// GTK CSS does not reliably accept every browser-style color form, so
+    /// `css_color` converts NeoDash's default #RRGGBBAA color into rgba().
     /// That keeps the default widget background from becoming a GTK warning.
     fn install_widget_css(widget: &WidgetConfig) {
         let background = css_color(&widget.style.background);
@@ -296,6 +385,10 @@ mod gui {
                 background: {};
                 opacity: {};
                 border-radius: {}px;
+            }}
+
+            .neodash-debug-frame {{
+                border: 1px solid rgba(255, 255, 255, 0.65);
             }}
 
             .neodash-widget-label {{
