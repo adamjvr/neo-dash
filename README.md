@@ -205,3 +205,14 @@ cargo run -p neodash-app --features gui,x11-desktop -- \
 ```
 
 See `docs/PROFILE_LOADING.md` for the current profile format and limitations.
+
+## Profile inspection
+
+Profiles can be inspected without opening the GTK app:
+
+```bash
+cargo run -p neodash-cli -- profile-info examples/profiles/default.toml
+```
+
+Profile parsing and profile-relative path resolution are shared through
+`neodash-core`; see `docs/PROFILE_MODEL.md` for details.

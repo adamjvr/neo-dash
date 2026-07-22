@@ -43,3 +43,35 @@ cargo run -p neodash-cli -- run-widget examples/widgets/date.toml --once
 ## Current implementation target: promote profile loading
 
 Profile loading now exists in the GTK app. Next, move `ProfileConfig` into `neodash-core`, add parsing tests, add duplicate widget ID validation, and define the `~/.config/neodash` layout.
+
+## Current implementation target: user config discovery
+
+Profile parsing is now shared through `neodash-core`. The next runtime milestone
+is user config discovery.
+
+Target layout:
+
+```text
+~/.config/neodash/
+  profiles/
+    default.toml
+  widgets/
+    date.toml
+    uptime.toml
+  themes/
+    default.toml
+```
+
+Target commands:
+
+```bash
+neodash profile-info default
+neodash-app --profile default
+```
+
+Implementation notes:
+
+- Use the `directories` crate already present in workspace dependencies.
+- Keep explicit file paths working.
+- Add a resolver that treats bare names as profile IDs under the config dir.
+- Add tests before moving more runtime ownership into the daemon.

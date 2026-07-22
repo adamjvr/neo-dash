@@ -74,18 +74,14 @@ mod gui {
     use clap::Parser;
     use gtk::glib;
     use gtk::prelude::*;
-    use neodash_core::{GeometryConfig, WidgetConfig, WidgetType};
+    use neodash_core::{
+        collect_profile_widget_paths, discover_widget_paths, load_profile_from_path,
+        GeometryConfig, LoadedProfile, WidgetConfig, WidgetType,
+    };
     use neodash_exec::run_shell_command_once;
     use neodash_platform::detect_backend_from_env;
     use neodash_runtime::load_widget_from_path;
-    use serde::Deserialize;
-    use std::{
-        cell::RefCell,
-        fs,
-        path::{Path, PathBuf},
-        rc::Rc,
-        time::Duration,
-    };
+    use std::{cell::RefCell, path::PathBuf, rc::Rc, time::Duration};
 
     /// Command line arguments for the graphical NeoDash widget preview.
     ///
@@ -167,7 +163,19 @@ mod gui {
         let cli = Cli::parse();
 
         let loaded_profile = match cli.profile.as_ref() {
-            Some(profile_path) => Some(load_profile(profile_path)?),
+            Some(profile_path) => {
+                let loaded = load_profile_from_path(profile_path)?;
+                tracing::info!(
+                    path = %loaded.path.display(),
+                    profile_id = loaded.profile.id.as_deref().unwrap_or("<unnamed>"),
+                    profile_name = loaded.profile.name.as_deref().unwrap_or("<unnamed>"),
+                    widget_count = loaded.profile.widgets.len(),
+                    widget_dir_count = loaded.profile.widget_dirs.len(),
+                    desktop_hints = loaded.profile.desktop_hints.unwrap_or(false),
+                    "loaded NeoDash profile through shared profile model"
+                );
+                Some(loaded)
+            }
             None => None,
         };
 
@@ -230,55 +238,6 @@ mod gui {
         Ok(())
     }
 
-    #[derive(Debug, Deserialize)]
-    struct ProfileConfig {
-        id: Option<String>,
-        name: Option<String>,
-        #[serde(default)]
-        widgets: Vec<PathBuf>,
-        #[serde(default)]
-        widget_dirs: Vec<PathBuf>,
-        #[serde(default)]
-        desktop_hints: Option<bool>,
-    }
-
-    #[derive(Debug)]
-    struct LoadedProfile {
-        base_dir: PathBuf,
-        profile: ProfileConfig,
-    }
-
-    fn load_profile(path: &Path) -> anyhow::Result<LoadedProfile> {
-        let profile_text = fs::read_to_string(path)
-            .with_context(|| format!("failed to read profile {}", path.display()))?;
-        let profile: ProfileConfig = toml::from_str(&profile_text)
-            .with_context(|| format!("failed to parse profile {}", path.display()))?;
-        let base_dir = path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-
-        tracing::info!(
-            path = %path.display(),
-            profile_id = profile.id.as_deref().unwrap_or("<unnamed>"),
-            profile_name = profile.name.as_deref().unwrap_or("<unnamed>"),
-            widget_count = profile.widgets.len(),
-            widget_dir_count = profile.widget_dirs.len(),
-            desktop_hints = profile.desktop_hints.unwrap_or(false),
-            "loaded NeoDash profile"
-        );
-
-        Ok(LoadedProfile { base_dir, profile })
-    }
-
-    fn resolve_profile_path(base_dir: &Path, path: &Path) -> PathBuf {
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            base_dir.join(path)
-        }
-    }
-
     /// Collect widget paths from an optional profile plus explicit CLI arguments.
     ///
     /// Loading order: profile widgets, profile widget_dirs, explicit --widget,
@@ -290,13 +249,7 @@ mod gui {
         let mut paths = Vec::new();
 
         if let Some(loaded) = loaded_profile {
-            for widget in &loaded.profile.widgets {
-                paths.push(resolve_profile_path(&loaded.base_dir, widget));
-            }
-            for dir in &loaded.profile.widget_dirs {
-                let dir = resolve_profile_path(&loaded.base_dir, dir);
-                paths.extend(discover_widget_paths(&dir)?);
-            }
+            paths.extend(collect_profile_widget_paths(loaded)?);
         }
 
         paths.extend(cli.widgets.iter().cloned());
@@ -308,40 +261,6 @@ mod gui {
             !paths.is_empty(),
             "no widgets requested; pass --profile FILE, --widget FILE, or --widgets-dir DIR"
         );
-
-        Ok(paths)
-    }
-
-    /// Discover direct-child TOML files in a widget directory.
-    ///
-    /// This intentionally does not recurse. Recursive loading should wait until
-    /// NeoDash has a profile and widget-pack layout so nested folders have a
-    /// defined meaning.
-    fn discover_widget_paths(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
-        let mut paths = Vec::new();
-
-        for entry in fs::read_dir(dir)
-            .with_context(|| format!("failed to read widget directory {}", dir.display()))?
-        {
-            let entry =
-                entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
-            let path = entry.path();
-
-            if !path.is_file() {
-                continue;
-            }
-
-            let is_toml = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"));
-
-            if is_toml {
-                paths.push(path);
-            }
-        }
-
-        paths.sort();
 
         Ok(paths)
     }

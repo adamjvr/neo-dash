@@ -58,3 +58,23 @@
 - Initial `--profile` support in `neodash-app`.
 - Example profile at `examples/profiles/default.toml`.
 - Relative path resolution for profile widget paths and directories.
+
+## Phase update: shared profile model
+
+Status: complete.
+
+Delivered:
+
+- Shared profile model in `neodash-core`.
+- Shared profile path resolution.
+- Shared widget directory discovery.
+- CLI profile inspection command.
+- GTK app now uses the shared profile loader.
+- Documentation for the profile model.
+
+Next:
+
+- User config directory discovery.
+- Profile lookup by name.
+- Duplicate widget ID validation.
+- Daemon-owned profile state.

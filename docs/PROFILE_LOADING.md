@@ -32,3 +32,14 @@ example profile lives in `examples/profiles`, so `../widgets` points at
 - No duplicate widget ID validation yet.
 - No themes or per-widget overrides yet.
 - No daemon-owned profile state yet.
+
+## Shared core model
+
+Profile parsing and path resolution now live in `neodash-core`. The GTK app uses
+that shared model, and the CLI can inspect profiles with:
+
+```bash
+cargo run -p neodash-cli -- profile-info examples/profiles/default.toml
+```
+
+See `docs/PROFILE_MODEL.md` for the shared model details.

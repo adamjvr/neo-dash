@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use clap::{Parser, Subcommand};
-use neodash_core::{SourceConfig, WidgetConfig, WidgetId, WidgetType};
+use neodash_core::{
+    collect_profile_widget_paths, load_profile_from_path, SourceConfig, WidgetConfig, WidgetId,
+    WidgetType,
+};
 use neodash_platform::detect_backend_from_env;
 use neodash_runtime::{
     run_source_to_terminal, run_widget_path_to_terminal, RefreshMode, TerminalRunOptions,
@@ -53,6 +56,12 @@ enum Commands {
         /// Clear the terminal before each watched frame.
         #[arg(long, default_value_t = false)]
         clear: bool,
+    },
+
+    /// Inspect a NeoDash profile and print the resolved widget paths.
+    ProfileInfo {
+        /// Path to a profile TOML file, for example examples/profiles/default.toml.
+        path: PathBuf,
     },
 
     /// Print the backend NeoDash would probably use in this session.
@@ -108,6 +117,33 @@ fn main() -> anyhow::Result<()> {
             };
 
             run_widget_path_to_terminal(path, options)?;
+        }
+        Commands::ProfileInfo { path } => {
+            let loaded = load_profile_from_path(&path)?;
+            let widget_paths = collect_profile_widget_paths(&loaded)?;
+
+            println!("Profile file: {}", loaded.path.display());
+            println!(
+                "Profile id: {}",
+                loaded.profile.id.as_deref().unwrap_or("<unnamed>")
+            );
+            println!(
+                "Profile name: {}",
+                loaded.profile.name.as_deref().unwrap_or("<unnamed>")
+            );
+            println!(
+                "Desktop hints: {}",
+                loaded
+                    .profile
+                    .desktop_hints
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "not set".to_string())
+            );
+            println!("Widget files: {}", widget_paths.len());
+
+            for path in widget_paths {
+                println!("  {}", path.display());
+            }
         }
         Commands::Backend => {
             let backend = detect_backend_from_env();

@@ -8,7 +8,9 @@
 pub mod config;
 pub mod ids;
 pub mod model;
+pub mod profile;
 
 pub use config::{load_widget_from_toml_str, save_widget_to_toml_string};
 pub use ids::{ProfileId, WidgetId};
 pub use model::*;
+pub use profile::*;
