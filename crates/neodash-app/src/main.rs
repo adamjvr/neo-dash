@@ -8,9 +8,14 @@
 // 2. The `gui` feature build.
 //    This enables the GTK4 widget preview window.
 //
+// Optional desktop-integration features are intentionally separate:
+//
+// - `x11-desktop` adds X11/EWMH window-manager hints.
+// - `layer-shell` is reserved for future Wayland layer-shell behavior.
+// - `adwaita` is reserved for the future editor/control app.
+//
 // The important architectural choice here is that the default app target does
-// not drag GTK into the entire workspace. NeoDash's core model, command runtime,
-// CLI, daemon, and tests should stay buildable without desktop libraries.
+// not drag GTK/X11/Wayland desktop integration into the entire workspace.
 
 #[cfg(not(feature = "gui"))]
 fn main() -> anyhow::Result<()> {
@@ -44,6 +49,7 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("Run:");
     println!("  cargo run -p neodash-app --features gui -- --widget examples/widgets/date.toml");
+    println!("  cargo run -p neodash-app --features gui,x11-desktop -- --widget examples/widgets/date.toml --desktop-hints");
     println!();
 
     Ok(())
@@ -82,35 +88,34 @@ mod gui {
         widget: PathBuf,
 
         /// Show normal window-manager decorations.
-        ///
-        /// The default is undecorated because NeoDash widgets should eventually
-        /// feel like desktop objects, not normal app windows. During development,
-        /// decorations are useful because they give you normal close/move/resize
-        /// controls from the window manager.
         #[arg(long, default_value_t = false)]
         decorated: bool,
 
         /// Allow the preview window to be resized by the window manager.
-        ///
-        /// The default is false so the preview respects the widget geometry in
-        /// the TOML file. Enable this when testing wrapping, padding, font size,
-        /// and general layout behavior.
         #[arg(long, default_value_t = false)]
         resizable: bool,
 
         /// Disable Escape-to-close.
-        ///
-        /// Escape-to-close is enabled by default because the window is normally
-        /// undecorated. This flag exists for input/focus testing later.
         #[arg(long, default_value_t = false)]
         no_escape_close: bool,
 
         /// Draw a visible border around the widget frame.
-        ///
-        /// This is a development aid. It makes it easier to see the actual GTK
-        /// box allocation when tuning padding, transparency, and window size.
         #[arg(long, default_value_t = false)]
         debug_frame: bool,
+
+        /// Apply desktop-widget window hints when the active backend supports it.
+        ///
+        /// On X11, this tries to set EWMH hints for:
+        ///
+        /// - skip taskbar
+        /// - skip pager
+        /// - sticky/all workspaces
+        /// - below normal windows
+        ///
+        /// This flag is opt-in for now because desktop-window behavior can make
+        /// a preview harder to find while we are still developing the renderer.
+        #[arg(long, default_value_t = false)]
+        desktop_hints: bool,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -119,6 +124,7 @@ mod gui {
         resizable: bool,
         close_on_escape: bool,
         debug_frame: bool,
+        desktop_hints: bool,
     }
 
     pub fn run() -> anyhow::Result<()> {
@@ -134,6 +140,7 @@ mod gui {
             resizable: cli.resizable,
             close_on_escape: !cli.no_escape_close,
             debug_frame: cli.debug_frame,
+            desktop_hints: cli.desktop_hints,
         };
 
         let app = gtk::Application::builder()
@@ -149,18 +156,12 @@ mod gui {
         // GTK/GApplication also tries to parse process arguments when `run()` is
         // called. Clap already parsed NeoDash-specific arguments above, so the
         // real argv would make GTK complain about options like `--widget`.
-        //
-        // Keep Clap in charge of NeoDash arguments and feed GTK a sanitized argv
-        // containing only a program name.
         app.run_with_args::<&str>(&["neodash-app"]);
 
         Ok(())
     }
 
     /// Reject unsupported widget types before GTK opens a window.
-    ///
-    /// This keeps the preview honest. A blank window is worse than a clear error.
-    /// The only renderer implemented in this file is shell-command text output.
     fn validate_preview_widget(widget: &WidgetConfig) -> anyhow::Result<()> {
         anyhow::ensure!(
             widget.enabled,
@@ -190,30 +191,28 @@ mod gui {
 
     /// Build the current NeoDash GTK preview window.
     ///
-    /// This is deliberately plain GTK4.
+    /// This is still deliberately plain GTK4.
     ///
-    /// It does not use layer-shell yet.
-    /// It does not try to become a desktop-pinned window yet.
-    /// It does not use libadwaita yet.
+    /// We use `geometry.width` and `geometry.height` here. Exact X/Y placement
+    /// is still a backend problem:
     ///
-    /// That restraint matters: we are proving the renderer first. Once a normal
-    /// native GTK window can show a live widget reliably, the next backend pass
-    /// can wrap that window with X11-specific or Wayland layer-shell behavior.
+    /// - X11: X11/EWMH/native placement path
+    /// - Wayland: layer-shell path
     ///
-    /// Geometry note:
-    ///
-    /// We use `geometry.width` and `geometry.height` here, but not `geometry.x`
-    /// and `geometry.y` yet. GTK4 removed the old global-coordinate window move
-    /// APIs. Exact desktop placement belongs in:
-    ///
-    /// - X11 backend code for X11 sessions
-    /// - layer-shell backend code for supported Wayland compositors
+    /// This iteration adds optional X11 desktop-style window-manager hints, but
+    /// not forced coordinate placement yet.
     fn build_widget_window(
         app: &gtk::Application,
         widget: Rc<WidgetConfig>,
         options: PreviewOptions,
     ) {
         let backend = detect_backend_from_env();
+        let window_title = format!(
+            "NeoDash Preview - {} [{}:{}]",
+            widget.name,
+            widget.id.0,
+            std::process::id()
+        );
 
         tracing::info!(
             ?backend.kind,
@@ -224,6 +223,7 @@ mod gui {
             resizable = options.resizable,
             close_on_escape = options.close_on_escape,
             debug_frame = options.debug_frame,
+            desktop_hints = options.desktop_hints,
             "opening NeoDash widget preview"
         );
 
@@ -249,7 +249,7 @@ mod gui {
 
         let window = gtk::ApplicationWindow::builder()
             .application(app)
-            .title(&widget.name)
+            .title(&window_title)
             .default_width(widget.geometry.width)
             .default_height(widget.geometry.height)
             .decorated(options.decorated)
@@ -264,6 +264,8 @@ mod gui {
         install_widget_css(&widget);
 
         window.present();
+
+        schedule_desktop_hints(options.desktop_hints, window_title);
 
         let label = Rc::new(label);
         let last_output = Rc::new(RefCell::new(String::new()));
@@ -286,11 +288,53 @@ mod gui {
         });
     }
 
-    /// Add Escape-to-close support to the preview window.
+    /// Apply desktop-hint behavior after GTK has had a moment to realize/map the
+    /// native window.
     ///
-    /// Undecorated windows are cool for a desktop-widget preview, but they are
-    /// annoying if there is no obvious way to close them. Escape keeps the
-    /// development loop fast without forcing normal titlebar decorations.
+    /// GTK exposes a high-level cross-platform window API. The X11 desktop hints
+    /// are lower-level EWMH properties on the native X11 window. For this first
+    /// X11 pass, we find the X11 window by its unique title after presentation.
+    /// It is slightly hacky, but it keeps the dependency optional and keeps the
+    /// GTK renderer independent from X11-specific code.
+    fn schedule_desktop_hints(enabled: bool, window_title: String) {
+        if !enabled {
+            return;
+        }
+
+        #[cfg(feature = "x11-desktop")]
+        {
+            glib::timeout_add_local(Duration::from_millis(250), move || {
+                match x11_desktop::apply_desktop_widget_hints(&window_title) {
+                    Ok(()) => {
+                        tracing::info!(
+                            window_title = %window_title,
+                            "applied X11 desktop-widget hints"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            window_title = %window_title,
+                            error = %error,
+                            "failed to apply X11 desktop-widget hints"
+                        );
+                    }
+                }
+
+                glib::ControlFlow::Break
+            });
+        }
+
+        #[cfg(not(feature = "x11-desktop"))]
+        {
+            let _ = window_title;
+
+            tracing::warn!(
+                "desktop hints requested, but neodash-app was built without the x11-desktop feature"
+            );
+        }
+    }
+
+    /// Add Escape-to-close support to the preview window.
     fn install_escape_to_close(window: &gtk::ApplicationWindow) {
         let controller = gtk::EventControllerKey::new();
         let weak_window = window.downgrade();
@@ -311,10 +355,6 @@ mod gui {
     }
 
     /// Run one command frame and update the visible label.
-    ///
-    /// The label is updated only when the rendered text changes. That is not
-    /// necessary for a one-label preview, but it is the right instinct for a
-    /// dashboard system where many widgets may refresh independently.
     fn refresh_label_once(
         widget: Rc<WidgetConfig>,
         label: Rc<gtk::Label>,
@@ -370,10 +410,6 @@ mod gui {
     }
 
     /// Install minimal CSS generated from `StyleConfig`.
-    ///
-    /// GTK CSS does not reliably accept every browser-style color form, so
-    /// `css_color` converts NeoDash's default #RRGGBBAA color into rgba().
-    /// That keeps the default widget background from becoming a GTK warning.
     fn install_widget_css(widget: &WidgetConfig) {
         let background = css_color(&widget.style.background);
         let foreground = css_color(&widget.style.foreground);
@@ -418,14 +454,6 @@ mod gui {
     }
 
     /// Convert simple NeoDash color strings into GTK-friendly CSS colors.
-    ///
-    /// Supported direct forms:
-    ///
-    /// - #RRGGBB
-    /// - #RRGGBBAA
-    ///
-    /// Anything else is returned unchanged so advanced users can still pass
-    /// normal GTK CSS color names or rgba() values later.
     fn css_color(input: &str) -> String {
         let trimmed = input.trim();
 
@@ -448,5 +476,166 @@ mod gui {
         }
 
         trimmed.to_string()
+    }
+
+    #[cfg(feature = "x11-desktop")]
+    mod x11_desktop {
+        use x11rb::{
+            connection::Connection,
+            protocol::xproto::{Atom, AtomEnum, ConnectionExt, PropMode, Window},
+            rust_connection::RustConnection,
+            wrapper::ConnectionExt as _,
+        };
+
+        struct X11Atoms {
+            net_wm_name: Atom,
+            utf8_string: Atom,
+            net_wm_state: Atom,
+            net_wm_state_skip_taskbar: Atom,
+            net_wm_state_skip_pager: Atom,
+            net_wm_state_sticky: Atom,
+            net_wm_state_below: Atom,
+            net_wm_desktop: Atom,
+        }
+
+        impl X11Atoms {
+            fn new<C: Connection>(connection: &C) -> anyhow::Result<Self> {
+                Ok(Self {
+                    net_wm_name: intern_atom(connection, b"_NET_WM_NAME")?,
+                    utf8_string: intern_atom(connection, b"UTF8_STRING")?,
+                    net_wm_state: intern_atom(connection, b"_NET_WM_STATE")?,
+                    net_wm_state_skip_taskbar: intern_atom(
+                        connection,
+                        b"_NET_WM_STATE_SKIP_TASKBAR",
+                    )?,
+                    net_wm_state_skip_pager: intern_atom(connection, b"_NET_WM_STATE_SKIP_PAGER")?,
+                    net_wm_state_sticky: intern_atom(connection, b"_NET_WM_STATE_STICKY")?,
+                    net_wm_state_below: intern_atom(connection, b"_NET_WM_STATE_BELOW")?,
+                    net_wm_desktop: intern_atom(connection, b"_NET_WM_DESKTOP")?,
+                })
+            }
+        }
+
+        /// Apply EWMH hints that make a normal X11 window behave more like a
+        /// desktop widget.
+        ///
+        /// This is a best-effort development implementation. Window managers may
+        /// interpret some hints differently. That is fine for this iteration; the
+        /// point is to prove the X11 direction without polluting the GTK renderer.
+        pub fn apply_desktop_widget_hints(window_title: &str) -> anyhow::Result<()> {
+            let (connection, screen_number) = RustConnection::connect(None)?;
+            let screen = &connection.setup().roots[screen_number];
+            let root = screen.root;
+            let atoms = X11Atoms::new(&connection)?;
+
+            let window = find_window_by_title(&connection, root, &atoms, window_title)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("could not find X11 window titled {window_title:?}")
+                })?;
+
+            let states = [
+                atoms.net_wm_state_skip_taskbar,
+                atoms.net_wm_state_skip_pager,
+                atoms.net_wm_state_sticky,
+                atoms.net_wm_state_below,
+            ];
+
+            connection.change_property32(
+                PropMode::REPLACE,
+                window,
+                atoms.net_wm_state,
+                AtomEnum::ATOM,
+                &states,
+            )?;
+
+            // 0xFFFFFFFF means "all desktops" in EWMH.
+            connection.change_property32(
+                PropMode::REPLACE,
+                window,
+                atoms.net_wm_desktop,
+                AtomEnum::CARDINAL,
+                &[u32::MAX],
+            )?;
+
+            connection.flush()?;
+
+            Ok(())
+        }
+
+        fn intern_atom<C: Connection>(connection: &C, name: &[u8]) -> anyhow::Result<Atom> {
+            Ok(connection.intern_atom(false, name)?.reply()?.atom)
+        }
+
+        fn find_window_by_title<C: Connection>(
+            connection: &C,
+            root: Window,
+            atoms: &X11Atoms,
+            title: &str,
+        ) -> anyhow::Result<Option<Window>> {
+            let mut stack = vec![root];
+
+            while let Some(window) = stack.pop() {
+                if window_has_title(connection, window, atoms, title).unwrap_or(false) {
+                    return Ok(Some(window));
+                }
+
+                let tree = match connection.query_tree(window) {
+                    Ok(cookie) => match cookie.reply() {
+                        Ok(tree) => tree,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+
+                stack.extend(tree.children);
+            }
+
+            Ok(None)
+        }
+
+        fn window_has_title<C: Connection>(
+            connection: &C,
+            window: Window,
+            atoms: &X11Atoms,
+            title: &str,
+        ) -> anyhow::Result<bool> {
+            if property_contains_text(
+                connection,
+                window,
+                atoms.net_wm_name,
+                atoms.utf8_string,
+                title,
+            )? {
+                return Ok(true);
+            }
+
+            property_contains_text(
+                connection,
+                window,
+                AtomEnum::WM_NAME.into(),
+                AtomEnum::STRING.into(),
+                title,
+            )
+        }
+
+        fn property_contains_text<C: Connection>(
+            connection: &C,
+            window: Window,
+            property: Atom,
+            property_type: Atom,
+            text: &str,
+        ) -> anyhow::Result<bool> {
+            let reply = connection
+                .get_property(false, window, property, property_type, 0, 1024)?
+                .reply()?;
+
+            if reply.value.is_empty() {
+                return Ok(false);
+            }
+
+            let value = String::from_utf8_lossy(&reply.value);
+
+            Ok(value.contains(text))
+        }
     }
 }

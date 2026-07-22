@@ -15,6 +15,7 @@ default = []
 gui = ["dep:gtk"]
 adwaita = ["gui", "dep:adw"]
 layer-shell = ["gui", "dep:gtk4-layer-shell"]
+x11-desktop = ["dep:x11rb"]
 
 [dependencies]
 anyhow.workspace = true
@@ -22,6 +23,7 @@ clap.workspace = true
 gtk = { workspace = true, optional = true }
 adw = { workspace = true, optional = true }
 gtk4-layer-shell = { workspace = true, optional = true }
+x11rb = { version = "0.13", optional = true }
 neodash-core = { path = "../neodash-core" }
 neodash-exec = { path = "../neodash-exec" }
 neodash-platform = { path = "../neodash-platform" }
