@@ -28,8 +28,12 @@ fn main() -> anyhow::Result<()> {
     #[command(about = "NeoDash graphical app skeleton")]
     struct Cli {
         /// Widget TOML file to preview once GUI support is enabled.
-        #[arg(long)]
-        widget: Option<PathBuf>,
+        #[arg(long = "widget", value_name = "FILE")]
+        widgets: Vec<PathBuf>,
+
+        /// Directory of widget TOML files to preview once GUI support is enabled.
+        #[arg(long = "widgets-dir", value_name = "DIR")]
+        widget_dirs: Vec<PathBuf>,
     }
 
     tracing_subscriber::fmt().with_env_filter("info").init();
@@ -40,8 +44,12 @@ fn main() -> anyhow::Result<()> {
     println!("NeoDash GTK app skeleton");
     println!("backend guess: {:?} - {}", backend.kind, backend.reason);
 
-    if let Some(widget) = cli.widget {
+    for widget in cli.widgets {
         println!("requested widget: {}", widget.display());
+    }
+
+    for dir in cli.widget_dirs {
+        println!("requested widget directory: {}", dir.display());
     }
 
     println!();
@@ -49,7 +57,7 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("Run:");
     println!("  cargo run -p neodash-app --features gui -- --widget examples/widgets/date.toml");
-    println!("  cargo run -p neodash-app --features gui,x11-desktop -- --widget examples/widgets/date.toml --desktop-hints");
+    println!("  cargo run -p neodash-app --features gui,x11-desktop -- --widgets-dir examples/widgets --desktop-hints");
     println!();
 
     Ok(())
@@ -62,6 +70,7 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(feature = "gui")]
 mod gui {
+    use anyhow::Context;
     use clap::Parser;
     use gtk::glib;
     use gtk::prelude::*;
@@ -69,7 +78,13 @@ mod gui {
     use neodash_exec::run_shell_command_once;
     use neodash_platform::detect_backend_from_env;
     use neodash_runtime::load_widget_from_path;
-    use std::{cell::RefCell, path::PathBuf, rc::Rc, time::Duration};
+    use std::{
+        cell::RefCell,
+        fs,
+        path::{Path, PathBuf},
+        rc::Rc,
+        time::Duration,
+    };
 
     /// Command line arguments for the graphical NeoDash widget preview.
     ///
@@ -88,8 +103,15 @@ mod gui {
         /// May be repeated:
         ///
         ///   --widget examples/widgets/date.toml --widget examples/widgets/uptime.toml
-        #[arg(long = "widget", value_name = "FILE", required = true)]
+        #[arg(long = "widget", value_name = "FILE")]
         widgets: Vec<PathBuf>,
+
+        /// Directory containing widget TOML files to preview.
+        ///
+        /// NeoDash loads direct child files ending in `.toml`, sorted by path for
+        /// deterministic startup behavior. It does not recurse yet.
+        #[arg(long = "widgets-dir", value_name = "DIR")]
+        widget_dirs: Vec<PathBuf>,
 
         /// Show normal window-manager decorations.
         #[arg(long, default_value_t = false)]
@@ -144,12 +166,15 @@ mod gui {
             desktop_hints: cli.desktop_hints,
         };
 
+        let widget_paths = collect_widget_paths(&cli)?;
         let mut widgets = Vec::new();
 
-        for widget_path in &cli.widgets {
-            let widget = load_widget_from_path(widget_path)?;
+        for widget_path in &widget_paths {
+            let widget = load_widget_from_path(widget_path)
+                .with_context(|| format!("failed to load widget {}", widget_path.display()))?;
 
-            validate_preview_widget(&widget)?;
+            validate_preview_widget(&widget)
+                .with_context(|| format!("widget {} is not previewable", widget_path.display()))?;
 
             tracing::info!(
                 path = %widget_path.display(),
@@ -185,6 +210,62 @@ mod gui {
         app.run_with_args::<&str>(&["neodash-app"]);
 
         Ok(())
+    }
+
+    /// Collect widget paths from explicit `--widget` arguments and direct child
+    /// TOML files from every `--widgets-dir` argument.
+    ///
+    /// Explicit widgets are loaded first in the order supplied. Directory files
+    /// are loaded afterward, sorted by path for deterministic startup behavior.
+    fn collect_widget_paths(cli: &Cli) -> anyhow::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+
+        paths.extend(cli.widgets.iter().cloned());
+
+        for dir in &cli.widget_dirs {
+            paths.extend(discover_widget_paths(dir)?);
+        }
+
+        anyhow::ensure!(
+            !paths.is_empty(),
+            "no widgets requested; pass --widget FILE or --widgets-dir DIR"
+        );
+
+        Ok(paths)
+    }
+
+    /// Discover direct-child TOML files in a widget directory.
+    ///
+    /// This intentionally does not recurse. Recursive loading should wait until
+    /// NeoDash has a profile and widget-pack layout so nested folders have a
+    /// defined meaning.
+    fn discover_widget_paths(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+
+        for entry in fs::read_dir(dir)
+            .with_context(|| format!("failed to read widget directory {}", dir.display()))?
+        {
+            let entry =
+                entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let is_toml = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"));
+
+            if is_toml {
+                paths.push(path);
+            }
+        }
+
+        paths.sort();
+
+        Ok(paths)
     }
 
     /// Reject unsupported widget types before GTK opens a window.
