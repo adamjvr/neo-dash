@@ -681,6 +681,8 @@ dependencies = [
  "neodash-exec",
  "neodash-platform",
  "neodash-runtime",
+ "serde",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "x11rb",

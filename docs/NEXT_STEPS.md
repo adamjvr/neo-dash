@@ -38,3 +38,8 @@ cargo run -p neodash-cli -- run-widget examples/widgets/date.toml --once
 - Add X11 window hints for below/sticky/skip-taskbar behavior
 - Add click-through behavior where supported
 - Load multiple widgets from `~/.config/neodash/widgets/*.toml`
+
+
+## Current implementation target: promote profile loading
+
+Profile loading now exists in the GTK app. Next, move `ProfileConfig` into `neodash-core`, add parsing tests, add duplicate widget ID validation, and define the `~/.config/neodash` layout.

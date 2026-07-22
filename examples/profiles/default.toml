@@ -1,7 +1,7 @@
 id = "default"
-name = "Default"
-enabled = true
+name = "Default NeoDash Example Dashboard"
 
-[[widgets]]
-id = "date-clock"
-path = "../widgets/date.toml"
+# Relative paths are resolved from this profile file's parent directory.
+widget_dirs = ["../widgets"]
+
+desktop_hints = true

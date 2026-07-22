@@ -193,3 +193,15 @@ git init
 git add .
 git commit -m "Initial NeoDash MPL-licensed Rust workspace"
 ```
+
+## Profile loading
+
+NeoDash can now launch a dashboard from a profile file:
+
+```bash
+cargo run -p neodash-app --features gui,x11-desktop -- \
+  --profile examples/profiles/default.toml \
+  --debug-frame
+```
+
+See `docs/PROFILE_LOADING.md` for the current profile format and limitations.

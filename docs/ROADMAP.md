@@ -51,3 +51,10 @@
 - Real docs
 - AppImage/deb/AUR packaging
 - Wayland/X11 backend confidence
+
+
+## Phase 5 update: profile loading started
+
+- Initial `--profile` support in `neodash-app`.
+- Example profile at `examples/profiles/default.toml`.
+- Relative path resolution for profile widget paths and directories.
