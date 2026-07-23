@@ -95,3 +95,20 @@ The GTK app uses the same validation before launching a profile.
 - Config directory resolution.
 - Config directory initialization via `config-init`.
 - Bare profile-name resolution such as `--profile default`.
+
+
+## Layout usability checkpoint
+
+Status: started.
+
+Delivered:
+
+- `--layout-mode` for movable decorated preview windows.
+- `--no-desktop-hints` to override profile-requested desktop hints.
+- Safer starter spacing for the date and uptime widgets.
+
+Remaining:
+
+- Persist moved window geometry.
+- Add a visual layout/editor mode.
+- Move geometry save behavior into the future GTK control app.

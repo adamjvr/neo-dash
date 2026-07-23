@@ -111,3 +111,26 @@ Next daemon targets:
 - Make the daemon load a profile by name.
 - Make the daemon own refresh scheduling.
 - Keep GTK as a viewer/editor instead of the sole runtime owner.
+
+
+## Current usability target: save layout changes
+
+Layout mode now makes widgets movable through the window manager, but NeoDash
+does not yet persist moved window positions.
+
+Current layout-debug command:
+
+```bash
+cargo run -p neodash-app --features gui,x11-desktop -- \
+  --profile default \
+  --layout-mode \
+  --debug-frame
+```
+
+Next targets:
+
+- Display current geometry in logs or an overlay.
+- Add a layout inspector surface.
+- Save updated `x`, `y`, `width`, and `height` values back to widget TOML.
+- Eventually support drag/resize directly inside NeoDash rather than relying on
+  the window manager.

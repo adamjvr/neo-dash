@@ -147,6 +147,21 @@ mod gui {
         /// a preview harder to find while we are still developing the renderer.
         #[arg(long, default_value_t = false)]
         desktop_hints: bool,
+
+        /// Disable desktop-widget window hints even if the profile requests them.
+        ///
+        /// This is useful when testing a profile that normally wants to live on
+        /// the desktop layer but needs to be inspected as normal windows.
+        #[arg(long, default_value_t = false)]
+        no_desktop_hints: bool,
+
+        /// Open widgets as normal movable/resizable windows for layout editing.
+        ///
+        /// This is a convenience mode equivalent to using normal decorations,
+        /// allowing resize, and suppressing desktop-widget hints. It is meant for
+        /// adjusting a dashboard before launching it as pinned desktop widgets.
+        #[arg(long, default_value_t = false)]
+        layout_mode: bool,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -190,13 +205,25 @@ mod gui {
             .and_then(|loaded| loaded.profile.desktop_hints)
             .unwrap_or(false);
 
+        let desktop_hints = if cli.layout_mode || cli.no_desktop_hints {
+            false
+        } else {
+            cli.desktop_hints || profile_desktop_hints
+        };
+
         let options = PreviewOptions {
-            decorated: cli.decorated,
-            resizable: cli.resizable,
+            decorated: cli.decorated || cli.layout_mode,
+            resizable: cli.resizable || cli.layout_mode,
             close_on_escape: !cli.no_escape_close,
             debug_frame: cli.debug_frame,
-            desktop_hints: cli.desktop_hints || profile_desktop_hints,
+            desktop_hints,
         };
+
+        if cli.layout_mode {
+            tracing::info!(
+                "layout mode enabled: widget windows will be decorated, resizable, and free of desktop hints"
+            );
+        }
 
         let widget_paths = collect_widget_paths(&cli, loaded_profile.as_ref())?;
         let mut widgets = Vec::new();

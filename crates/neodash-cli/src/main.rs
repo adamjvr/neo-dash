@@ -200,7 +200,7 @@ parse_ansi = true
 [geometry]
 monitor = "primary"
 x = 40
-y = 190
+y = 230
 width = 620
 height = 100
 anchor = "top-left"

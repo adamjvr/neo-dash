@@ -195,6 +195,23 @@ git commit -m "Initial NeoDash MPL-licensed Rust workspace"
 ```
 
 
+
+## Layout mode
+
+Desktop-widget mode intentionally creates undecorated, hard-to-grab windows.
+Use layout mode when arranging or debugging a dashboard:
+
+```bash
+cargo run -p neodash-app --features gui,x11-desktop -- \
+  --profile default \
+  --layout-mode \
+  --debug-frame
+```
+
+Layout mode makes widget windows decorated and resizable while suppressing
+desktop hints, so the window manager can move them normally. See
+`docs/LAYOUT_MODE.md`.
+
 ## User config directory
 
 NeoDash can initialize and use a local config directory:
