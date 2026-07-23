@@ -194,6 +194,23 @@ git add .
 git commit -m "Initial NeoDash MPL-licensed Rust workspace"
 ```
 
+
+## User config directory
+
+NeoDash can initialize and use a local config directory:
+
+```bash
+cargo run -p neodash-cli -- config-dir
+cargo run -p neodash-cli -- config-init --force
+cargo run -p neodash-cli -- profile-info default
+cargo run -p neodash-cli -- profile-check default
+cargo run -p neodash-app --features gui,x11-desktop -- --profile default --debug-frame
+```
+
+A bare profile name such as `default` resolves to
+`~/.config/neodash/profiles/default.toml`, unless `NEODASH_CONFIG_DIR` points at
+another config root. See `docs/CONFIG_DIRECTORY.md`.
+
 ## Profile loading
 
 NeoDash can now launch a dashboard from a profile file:

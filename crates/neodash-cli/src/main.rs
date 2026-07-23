@@ -2,15 +2,18 @@
 
 use clap::{Parser, Subcommand};
 use neodash_core::{
-    collect_profile_widget_paths, load_profile_from_path, validate_profile, LoadedProfile,
-    ProfileValidationReport, ProfileValidationSeverity, SourceConfig, WidgetConfig, WidgetId,
-    WidgetType,
+    collect_profile_widget_paths, load_profile_from_path, neodash_config_paths,
+    resolve_profile_selector, validate_profile, LoadedProfile, ProfileValidationReport,
+    ProfileValidationSeverity, SourceConfig, WidgetConfig, WidgetId, WidgetType,
 };
 use neodash_platform::detect_backend_from_env;
 use neodash_runtime::{
     run_source_to_terminal, run_widget_path_to_terminal, RefreshMode, TerminalRunOptions,
 };
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "neodash")]
@@ -71,6 +74,16 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Print the resolved NeoDash user config directories.
+    ConfigDir,
+
+    /// Install the example dashboard into the NeoDash user config directory.
+    ConfigInit {
+        /// Overwrite existing profile and widget files.
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+
     /// Print the backend NeoDash would probably use in this session.
     Backend,
 
@@ -128,6 +141,131 @@ fn print_profile_validation_report(loaded: &LoadedProfile, report: &ProfileValid
     }
 }
 
+const DEFAULT_PROFILE_TOML: &str = r#"
+id = "default"
+name = "Default NeoDash Dashboard"
+
+widget_dirs = ["../widgets"]
+desktop_hints = true
+"#;
+
+const DEFAULT_DATE_WIDGET_TOML: &str = r##"
+id = "date-clock"
+name = "Date Clock"
+type = "shell"
+enabled = true
+
+[source]
+command = "date '+%Y-%m-%d %H:%M:%S'"
+shell = "/bin/bash"
+interval_ms = 1000
+timeout_ms = 800
+show_stderr = false
+parse_ansi = true
+
+[geometry]
+monitor = "primary"
+x = 40
+y = 40
+width = 400
+height = 120
+anchor = "top-left"
+layer = "background"
+click_through = true
+
+[style]
+font_family = "monospace"
+font_size = 18
+foreground = "#eeeeee"
+background = "#00000088"
+opacity = 1.0
+padding = 8
+border_radius = 0
+"##;
+
+const DEFAULT_UPTIME_WIDGET_TOML: &str = r##"
+id = "uptime-status"
+name = "Uptime Status"
+type = "shell"
+enabled = true
+
+[source]
+command = "uptime"
+shell = "/bin/bash"
+interval_ms = 5000
+timeout_ms = 1200
+show_stderr = false
+parse_ansi = true
+
+[geometry]
+monitor = "primary"
+x = 40
+y = 190
+width = 620
+height = 100
+anchor = "top-left"
+layer = "background"
+click_through = true
+
+[style]
+font_family = "monospace"
+font_size = 13
+foreground = "#eeeeee"
+background = "#00000088"
+opacity = 1.0
+padding = 8
+border_radius = 0
+"##;
+
+/// Install a starter NeoDash dashboard into the user's config directory.
+fn init_user_config(force: bool) -> anyhow::Result<()> {
+    let paths = neodash_config_paths()?;
+
+    fs::create_dir_all(&paths.profiles_dir)?;
+    fs::create_dir_all(&paths.widgets_dir)?;
+    fs::create_dir_all(&paths.themes_dir)?;
+
+    write_config_file(
+        &paths.profiles_dir.join("default.toml"),
+        DEFAULT_PROFILE_TOML.trim_start(),
+        force,
+    )?;
+    write_config_file(
+        &paths.widgets_dir.join("date.toml"),
+        DEFAULT_DATE_WIDGET_TOML.trim_start(),
+        force,
+    )?;
+    write_config_file(
+        &paths.widgets_dir.join("uptime.toml"),
+        DEFAULT_UPTIME_WIDGET_TOML.trim_start(),
+        force,
+    )?;
+
+    println!("NeoDash config initialized:");
+    println!("  {}", paths.config_dir.display());
+    println!();
+    println!("Try:");
+    println!("  cargo run -p neodash-cli -- profile-info default");
+    println!("  cargo run -p neodash-cli -- profile-check default");
+    println!(
+        "  cargo run -p neodash-app --features gui,x11-desktop -- --profile default --debug-frame"
+    );
+
+    Ok(())
+}
+
+fn write_config_file(path: &Path, contents: &str, force: bool) -> anyhow::Result<()> {
+    if path.exists() && !force {
+        println!("kept existing: {}", path.display());
+        return Ok(());
+    }
+
+    fs::write(path, contents)?;
+    println!("wrote: {}", path.display());
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
 
@@ -176,7 +314,8 @@ fn main() -> anyhow::Result<()> {
             run_widget_path_to_terminal(path, options)?;
         }
         Commands::ProfileInfo { path } => {
-            let loaded = load_profile_from_path(&path)?;
+            let profile_path = resolve_profile_selector(&path)?;
+            let loaded = load_profile_from_path(&profile_path)?;
             let widget_paths = collect_profile_widget_paths(&loaded)?;
 
             println!("Profile file: {}", loaded.path.display());
@@ -203,7 +342,8 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::ProfileCheck { path } => {
-            let loaded = load_profile_from_path(&path)?;
+            let profile_path = resolve_profile_selector(&path)?;
+            let loaded = load_profile_from_path(&profile_path)?;
             let report = validate_profile(&loaded)?;
 
             print_profile_validation_report(&loaded, &report);
@@ -215,6 +355,17 @@ fn main() -> anyhow::Result<()> {
                     report.warning_count()
                 );
             }
+        }
+        Commands::ConfigDir => {
+            let paths = neodash_config_paths()?;
+
+            println!("Config dir: {}", paths.config_dir.display());
+            println!("Profiles dir: {}", paths.profiles_dir.display());
+            println!("Widgets dir: {}", paths.widgets_dir.display());
+            println!("Themes dir: {}", paths.themes_dir.display());
+        }
+        Commands::ConfigInit { force } => {
+            init_user_config(force)?;
         }
         Commands::Backend => {
             let backend = detect_backend_from_env();

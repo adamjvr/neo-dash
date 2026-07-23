@@ -87,3 +87,27 @@ Pre-daemon checks:
 cargo run -p neodash-cli -- profile-check examples/profiles/default.toml
 cargo run -p neodash-app --features gui,x11-desktop -- --profile examples/profiles/default.toml --debug-frame
 ```
+
+
+## Current implementation target: daemon-owned runtime
+
+Config directory support is now the bridge between repo examples and a real
+installed app workflow. The next major phase should move profile ownership into
+`neodash-daemon`.
+
+Current app-style flow:
+
+```bash
+cargo run -p neodash-cli -- config-init --force
+cargo run -p neodash-cli -- profile-check default
+cargo run -p neodash-app --features gui,x11-desktop -- --profile default --debug-frame
+```
+
+Next daemon targets:
+
+- Define daemon command interface.
+- Add `neodash daemon start`.
+- Add `neodash daemon status`.
+- Make the daemon load a profile by name.
+- Make the daemon own refresh scheduling.
+- Keep GTK as a viewer/editor instead of the sole runtime owner.

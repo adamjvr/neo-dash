@@ -89,3 +89,9 @@ cargo run -p neodash-cli -- profile-check examples/profiles/default.toml
 ```
 
 The GTK app uses the same validation before launching a profile.
+
+## Config directory phase
+
+- Config directory resolution.
+- Config directory initialization via `config-init`.
+- Bare profile-name resolution such as `--profile default`.

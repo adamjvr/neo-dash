@@ -76,8 +76,8 @@ mod gui {
     use gtk::prelude::*;
     use neodash_core::{
         collect_profile_widget_paths, discover_widget_paths, load_profile_from_path,
-        validate_profile, GeometryConfig, LoadedProfile, ProfileValidationSeverity, WidgetConfig,
-        WidgetType,
+        resolve_profile_selector, validate_profile, GeometryConfig, LoadedProfile,
+        ProfileValidationSeverity, WidgetConfig, WidgetType,
     };
     use neodash_exec::run_shell_command_once;
     use neodash_platform::detect_backend_from_env;
@@ -165,7 +165,8 @@ mod gui {
 
         let loaded_profile = match cli.profile.as_ref() {
             Some(profile_path) => {
-                let loaded = load_profile_from_path(profile_path)?;
+                let resolved_profile_path = resolve_profile_selector(profile_path)?;
+                let loaded = load_profile_from_path(&resolved_profile_path)?;
                 tracing::info!(
                     path = %loaded.path.display(),
                     profile_id = loaded.profile.id.as_deref().unwrap_or("<unnamed>"),
