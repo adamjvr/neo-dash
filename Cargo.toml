@@ -10,6 +10,7 @@ members = [
     "crates/neodash-daemon",
     "crates/neodash-cli",
     "crates/neodash-app",
+    "crates/neodash-cosmic",
 ]
 
 [workspace.package]

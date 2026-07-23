@@ -22,6 +22,19 @@ Rust app logic, not Python scripts duct-taped together.
 Native Linux toolkit bindings only where the desktop requires them.
 ```
 
+
+## Dual GTK and native COSMIC frontends
+
+NeoDash supports two first-class native frontend families rather than treating
+COSMIC as generic Wayland:
+
+- GTK4 for Pop!_OS 22.04, GNOME, X11, and generic layer-shell desktops.
+- libcosmic for COSMIC on Pop!_OS 24.04 and later.
+
+The libcosmic frontend has a `cosmic-winit` development build that can run on a
+non-COSMIC X11 desktop and a `cosmic-wayland` build that is compiled continuously
+for the real COSMIC target. See `docs/DUAL_FRONTEND_DEVELOPMENT.md`.
+
 ## License
 
 NeoDash is licensed under the **Mozilla Public License 2.0**.

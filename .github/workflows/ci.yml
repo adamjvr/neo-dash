@@ -21,3 +21,26 @@ jobs:
         run: cargo test --workspace
       - name: Clippy workspace
         run: cargo clippy --workspace -- -D warnings
+
+
+  cosmic-frontends:
+    name: COSMIC frontend checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install libcosmic build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            libexpat1-dev \
+            libfontconfig-dev \
+            libfreetype-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            pkg-config
+      - name: Check libcosmic winit development host
+        run: cargo check -p neodash-cosmic --features cosmic-winit
+      - name: Check native COSMIC Wayland host
+        run: cargo check -p neodash-cosmic --features cosmic-wayland

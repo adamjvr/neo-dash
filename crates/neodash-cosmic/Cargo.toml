@@ -1,0 +1,25 @@
+[package]
+name = "neodash-cosmic"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.93"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "neodash-cosmic"
+path = "src/main.rs"
+
+[features]
+default = []
+# Development mode: run the libcosmic frontend through winit/X11 on the
+# currently-installed non-COSMIC desktop.
+cosmic-winit = ["dep:cosmic", "cosmic/winit", "cosmic/x11", "cosmic/tokio", "cosmic/wgpu"]
+# Native target mode: compile the frontend with COSMIC/Wayland support.
+cosmic-wayland = ["dep:cosmic", "cosmic/wayland", "cosmic/tokio", "cosmic/wgpu"]
+
+[dependencies]
+anyhow.workspace = true
+neodash-platform = { path = "../neodash-platform" }
+cosmic = { package = "libcosmic", git = "https://github.com/pop-os/libcosmic.git", optional = true, default-features = false }

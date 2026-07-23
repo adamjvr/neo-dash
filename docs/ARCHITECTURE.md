@@ -62,3 +62,15 @@ Use this before committing:
 ```bash
 ./scripts/check_headless.sh
 ```
+
+
+## Frontend split
+
+`neodash-app` is the GTK compatibility and generic-Linux host.
+`neodash-cosmic` is the native libcosmic host.
+
+Both are presentation shells around the same core/runtime/daemon state. COSMIC
+Wayland selects `CosmicNative`; it is not routed through the generic layer-shell
+classification. The libcosmic host may also run through `cosmic-winit` during
+development on a non-COSMIC desktop, but that mode does not claim to validate
+COSMIC compositor integration.
