@@ -102,3 +102,21 @@ Native target compile test:
 cargo check -p neodash-cosmic --features cosmic-wayland
 ```
 
+## COSMIC independent-window phase
+
+The native host no longer combines all widgets into a diagnostic dashboard.
+Each widget receives its own libcosmic window and configured size. Under the
+`cosmic-winit` X11 development path, NeoDash also requests the configured `x/y`
+position. Ordinary Wayland toplevels do not support reliable absolute placement,
+so monitor, anchor, layer, and click-through behavior remains assigned to the
+following native COSMIC layer-surface phase.
+
+Use layout mode while developing outside COSMIC:
+
+```bash
+cargo run -p neodash-cosmic --features cosmic-winit -- \
+  --profile default \
+  --layout-mode \
+  --debug-frame
+```
+

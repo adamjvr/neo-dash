@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[cfg(any(test, feature = "cosmic-winit", feature = "cosmic-wayland"))]
+mod surface_plan;
+
 #[cfg(all(feature = "cosmic-winit", feature = "cosmic-wayland"))]
 compile_error!("enable exactly one of cosmic-winit or cosmic-wayland");
 
@@ -7,7 +10,7 @@ compile_error!("enable exactly one of cosmic-winit or cosmic-wayland");
 fn main() -> anyhow::Result<()> {
     let backend = neodash_platform::detect_backend_from_env();
 
-    println!("NeoDash native COSMIC host");
+    println!("NeoDash native COSMIC widget-surface host");
     println!(
         "detected: {:?} / {:?} / {:?}",
         backend.desktop_family, backend.display_protocol, backend.kind
@@ -16,8 +19,10 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("This binary was built without libcosmic support.");
     println!();
-    println!("Run the frontend on the current X11/non-COSMIC desktop:");
-    println!("  cargo run -p neodash-cosmic --features cosmic-winit -- --profile default");
+    println!("Run independent widget windows on the current desktop:");
+    println!(
+        "  cargo run -p neodash-cosmic --features cosmic-winit -- --profile default --layout-mode --debug-frame"
+    );
     println!();
     println!("Compile the native COSMIC Wayland target:");
     println!("  cargo check -p neodash-cosmic --features cosmic-wayland");
@@ -32,25 +37,27 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(any(feature = "cosmic-winit", feature = "cosmic-wayland"))]
 mod cosmic_host {
+    use crate::surface_plan::WidgetSurfacePlan;
     use clap::Parser;
-    use cosmic::iced::{Length, Subscription};
+    use cosmic::iced::{Length, Point, Size, Subscription, event, window};
     use cosmic::prelude::*;
-    use cosmic::widget;
+    use cosmic::widget::{self, header_bar};
     use neodash_core::{
         WidgetConfig, collect_profile_widget_paths, discover_widget_paths, load_profile_from_path,
         resolve_profile_selector, validate_profile,
     };
-    use neodash_platform::{BackendInfo, detect_backend_from_env};
+    use neodash_platform::{BackendInfo, DisplayProtocol, detect_backend_from_env};
     use neodash_runtime::{
         RuntimeEvent, WidgetRuntimeHandle, load_widget_from_path, spawn_widget_runtime,
     };
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::mpsc::{Receiver, TryRecvError};
     use std::time::Duration;
 
     #[derive(Debug, Parser)]
     #[command(name = "neodash-cosmic")]
-    #[command(about = "NeoDash native COSMIC dashboard host")]
+    #[command(about = "NeoDash native COSMIC widget-surface host")]
     struct Cli {
         /// Widget TOML file to load. May be repeated.
         #[arg(long = "widget", value_name = "FILE")]
@@ -63,11 +70,21 @@ mod cosmic_host {
         /// Dashboard profile path or bare profile name.
         #[arg(long, value_name = "PROFILE")]
         profile: Option<PathBuf>,
+
+        /// Add COSMIC header bars and allow resizing for layout/debug work.
+        #[arg(long)]
+        layout_mode: bool,
+
+        /// Show widget identity, runtime status, and frame count inside each window.
+        #[arg(long)]
+        debug_frame: bool,
     }
 
     struct Startup {
         platform: BackendInfo,
         widgets: Vec<WidgetConfig>,
+        layout_mode: bool,
+        debug_frame: bool,
     }
 
     pub fn run() -> anyhow::Result<()> {
@@ -76,17 +93,25 @@ mod cosmic_host {
         let startup = Startup {
             platform: detect_backend_from_env(),
             widgets,
+            layout_mode: cli.layout_mode,
+            debug_frame: cli.debug_frame,
         };
 
-        cosmic::app::run::<NeoDashCosmicApp>(cosmic::app::Settings::default(), startup)
+        // NeoDash owns only widget windows in this phase. There is deliberately no
+        // extra dashboard/controller window hiding behind them.
+        let settings = cosmic::app::Settings::default()
+            .no_main_window(true)
+            .exit_on_close(false)
+            .client_decorations(false)
+            .transparent(true);
+
+        cosmic::app::run::<NeoDashCosmicApp>(settings, startup)
             .map_err(|error| anyhow::anyhow!("COSMIC application error: {error}"))
     }
 
     fn load_requested_widgets(cli: &Cli) -> anyhow::Result<Vec<WidgetConfig>> {
         let mut paths = Vec::new();
 
-        // Preserve the convenient no-argument launch used during scaffold work by
-        // treating it as `--profile default` once a user config has been created.
         let profile_selector =
             if cli.profile.is_none() && cli.widgets.is_empty() && cli.widget_dirs.is_empty() {
                 Some(PathBuf::from("default"))
@@ -120,62 +145,86 @@ mod cosmic_host {
             "no widgets requested; pass --profile, --widget, or --widgets-dir"
         );
 
-        let mut widgets = Vec::with_capacity(paths.len());
-        for path in paths {
-            let widget = load_widget_from_path(&path).map_err(|error| {
-                anyhow::anyhow!("failed to load widget {}: {error:#}", path.display())
-            })?;
-            widgets.push(widget);
-        }
-
-        Ok(widgets)
+        paths
+            .into_iter()
+            .map(|path| {
+                load_widget_from_path(&path).map_err(|error| {
+                    anyhow::anyhow!("failed to load widget {}: {error:#}", path.display())
+                })
+            })
+            .collect()
     }
 
     #[derive(Clone, Debug)]
     enum Message {
         PollRuntime,
+        CloseWindow(window::Id),
+        WindowOpened(window::Id, Option<Point>),
+        WindowClosed(window::Id),
     }
 
     struct NeoDashCosmicApp {
         core: cosmic::Core,
         platform: BackendInfo,
-        sessions: Vec<WidgetSession>,
+        surfaces: HashMap<window::Id, WidgetSurface>,
     }
 
-    struct WidgetSession {
-        widget_id: String,
-        widget_name: String,
+    struct WidgetSurface {
+        plan: WidgetSurfacePlan,
         handle: Option<WidgetRuntimeHandle>,
         events: Option<Receiver<RuntimeEvent>>,
         latest_text: String,
         status: String,
         frame_count: u64,
+        layout_mode: bool,
+        debug_frame: bool,
     }
 
-    impl WidgetSession {
-        fn start(widget: WidgetConfig) -> Self {
-            let widget_id = widget.id.0.clone();
-            let widget_name = widget.name.clone();
+    impl WidgetSurface {
+        fn start(widget: WidgetConfig, layout_mode: bool, debug_frame: bool) -> Self {
+            let plan = WidgetSurfacePlan::from_widget(&widget);
 
             match spawn_widget_runtime(widget) {
                 Ok((handle, events)) => Self {
-                    widget_id,
-                    widget_name,
+                    plan,
                     handle: Some(handle),
                     events: Some(events),
                     latest_text: "NeoDash loading...".to_string(),
                     status: "runtime starting".to_string(),
                     frame_count: 0,
+                    layout_mode,
+                    debug_frame,
                 },
                 Err(error) => Self {
-                    widget_id,
-                    widget_name,
+                    plan,
                     handle: None,
                     events: None,
                     latest_text: format!("NeoDash runtime startup error:\n{error:#}"),
                     status: "runtime failed to start".to_string(),
                     frame_count: 0,
+                    layout_mode,
+                    debug_frame,
                 },
+            }
+        }
+
+        fn window_settings(&self, platform: &BackendInfo) -> window::Settings {
+            let position = if platform.display_protocol == DisplayProtocol::X11 {
+                window::Position::Specific(Point::new(self.plan.x as f32, self.plan.y as f32))
+            } else {
+                // Ordinary Wayland toplevels cannot request reliable absolute
+                // placement. COSMIC layer-surface positioning is the next phase.
+                window::Position::Default
+            };
+
+            window::Settings {
+                size: Size::new(self.plan.width as f32, self.plan.height as f32),
+                position,
+                resizable: self.layout_mode,
+                decorations: false,
+                transparent: true,
+                exit_on_close_request: false,
+                ..Default::default()
             }
         }
 
@@ -242,91 +291,134 @@ mod cosmic_host {
             core: cosmic::Core,
             startup: Self::Flags,
         ) -> (Self, Task<cosmic::Action<Self::Message>>) {
-            let sessions = startup
-                .widgets
-                .into_iter()
-                .map(WidgetSession::start)
-                .collect();
+            let mut surfaces = HashMap::with_capacity(startup.widgets.len());
+            let mut open_tasks = Vec::with_capacity(startup.widgets.len());
+
+            for widget in startup.widgets {
+                let surface =
+                    WidgetSurface::start(widget, startup.layout_mode, startup.debug_frame);
+                let settings = surface.window_settings(&startup.platform);
+                let (id, open_task) = window::open(settings);
+
+                surfaces.insert(id, surface);
+                open_tasks.push(
+                    open_task.map(|opened_id| {
+                        cosmic::Action::App(Message::WindowOpened(opened_id, None))
+                    }),
+                );
+            }
 
             (
                 Self {
                     core,
                     platform: startup.platform,
-                    sessions,
+                    surfaces,
                 },
-                Task::none(),
+                Task::batch(open_tasks),
             )
         }
 
         fn subscription(&self) -> Subscription<Self::Message> {
-            // This timer only delivers events to the COSMIC UI. Command execution
-            // and source.interval_ms scheduling remain inside neodash-runtime.
-            cosmic::iced::time::every(Duration::from_millis(32)).map(|_| Message::PollRuntime)
+            let runtime_poll =
+                cosmic::iced::time::every(Duration::from_millis(32)).map(|_| Message::PollRuntime);
+
+            let window_events = event::listen_with(|event, _, id| {
+                if let cosmic::iced::Event::Window(window_event) = event {
+                    match window_event {
+                        window::Event::CloseRequested => Some(Message::CloseWindow(id)),
+                        window::Event::Opened { position, .. } => {
+                            Some(Message::WindowOpened(id, position))
+                        }
+                        window::Event::Closed => Some(Message::WindowClosed(id)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            });
+
+            Subscription::batch([runtime_poll, window_events])
         }
 
         fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
             match message {
                 Message::PollRuntime => {
-                    for session in &mut self.sessions {
-                        session.poll();
+                    for surface in self.surfaces.values_mut() {
+                        surface.poll();
+                    }
+                    Task::none()
+                }
+                Message::CloseWindow(id) => window::close(id),
+                Message::WindowOpened(id, _reported_position) => {
+                    let Some(surface) = self.surfaces.get(&id) else {
+                        return Task::none();
+                    };
+
+                    let title = surface.plan.widget_name.clone();
+                    let target_position = Point::new(surface.plan.x as f32, surface.plan.y as f32);
+                    let mut tasks = vec![self.set_window_title(title, id)];
+
+                    // Winit/X11 supports explicit placement. Ordinary Wayland
+                    // toplevels do not; native COSMIC placement follows with the
+                    // layer-surface integration phase.
+                    if self.platform.display_protocol == DisplayProtocol::X11 {
+                        tasks.push(window::move_to(id, target_position));
+                    }
+
+                    Task::batch(tasks)
+                }
+                Message::WindowClosed(id) => {
+                    self.surfaces.remove(&id);
+                    if self.surfaces.is_empty() {
+                        cosmic::iced::exit()
+                    } else {
+                        Task::none()
                     }
                 }
             }
-
-            Task::none()
         }
 
         fn view(&self) -> Element<'_, Self::Message> {
-            let spacing = cosmic::theme::spacing().space_m;
-            let mut widget_list = widget::column::with_capacity(self.sessions.len())
+            // Settings::no_main_window(true) means this fallback is not normally
+            // displayed, but Application still requires a main view method.
+            widget::text::body("NeoDash widget surfaces are active").into()
+        }
+
+        fn view_window(&self, id: window::Id) -> Element<'_, Self::Message> {
+            let Some(surface) = self.surfaces.get(&id) else {
+                return widget::text::body("NeoDash widget surface is closing").into();
+            };
+
+            let spacing = cosmic::theme::spacing().space_s;
+            let mut content = widget::column::with_capacity(3)
+                .push(widget::text::body(surface.latest_text.as_str()))
                 .spacing(spacing)
                 .width(Length::Fill);
 
-            for session in &self.sessions {
-                let session_content = widget::column::with_capacity(4)
-                    .push(widget::text::title3(format!(
+            if surface.debug_frame {
+                content = content
+                    .push(widget::text::body(format!(
                         "{} ({})",
-                        session.widget_name, session.widget_id
+                        surface.plan.widget_name, surface.plan.widget_id
                     )))
-                    .push(widget::text::body(session.latest_text.as_str()))
                     .push(widget::text::body(format!(
                         "{} · {} frame(s)",
-                        session.status, session.frame_count
-                    )))
-                    .spacing(cosmic::theme::spacing().space_s)
-                    .width(Length::Fill);
-
-                widget_list = widget_list.push(
-                    widget::container(session_content)
-                        .padding(spacing)
-                        .width(Length::Fill),
-                );
+                        surface.status, surface.frame_count
+                    )));
             }
 
-            let content = widget::column::with_capacity(6)
-                .push(widget::text::title1("NeoDash"))
-                .push(widget::text::title3("Native COSMIC runtime host"))
-                .push(widget::text::body(format!(
-                    "Desktop: {:?}",
-                    self.platform.desktop_family
-                )))
-                .push(widget::text::body(format!(
-                    "Display: {:?}",
-                    self.platform.display_protocol
-                )))
-                .push(widget::text::body(format!(
-                    "Integration backend: {:?}",
-                    self.platform.kind
-                )))
-                .push(widget_list)
-                .spacing(spacing)
-                .width(Length::Fill);
-
-            widget::container(content)
-                .padding(spacing)
+            let window_content = widget::container(content)
+                .padding(surface.plan.padding)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .into()
+                .class(cosmic::style::Container::Background);
+
+            if surface.layout_mode {
+                let focused = self.core().focused_window() == Some(id);
+                widget::column![header_bar().focused(focused), window_content].into()
+            } else {
+                window_content.into()
+            }
         }
     }
 }

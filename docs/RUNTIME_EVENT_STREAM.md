@@ -46,3 +46,11 @@ The adapter is exercised locally with `cosmic-winit` and compiled continuously
 with `cosmic-wayland`. Desktop-layer surfaces under `cosmic-comp` remain a later
 platform-integration phase.
 
+## Independent COSMIC widget surfaces
+
+The libcosmic host now creates one independent window per widget. Every window
+owns only presentation state while its `WidgetRuntimeHandle` continues to own
+command execution, refresh timing, cancellation, and renderer-neutral events.
+Closing one window drops only that widget session; closing the final widget exits
+the iced daemon.
+

@@ -15,9 +15,9 @@ path = "src/main.rs"
 default = []
 # Development mode: run the libcosmic frontend through winit/X11 on the
 # currently-installed non-COSMIC desktop.
-cosmic-winit = ["dep:cosmic", "cosmic/winit", "cosmic/x11", "cosmic/tokio", "cosmic/wgpu"]
+cosmic-winit = ["dep:cosmic", "cosmic/winit", "cosmic/x11", "cosmic/tokio", "cosmic/wgpu", "cosmic/multi-window"]
 # Native target mode: compile the frontend with COSMIC/Wayland support.
-cosmic-wayland = ["dep:cosmic", "cosmic/wayland", "cosmic/tokio", "cosmic/wgpu"]
+cosmic-wayland = ["dep:cosmic", "cosmic/wayland", "cosmic/tokio", "cosmic/wgpu", "cosmic/multi-window"]
 
 [dependencies]
 anyhow.workspace = true
