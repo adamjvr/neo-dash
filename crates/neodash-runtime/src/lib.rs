@@ -220,6 +220,170 @@ fn clear_terminal() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One renderer-neutral frame produced by a widget source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeFrame {
+    pub widget_id: String,
+    pub text: String,
+    pub status_code: Option<i32>,
+    pub timed_out: bool,
+}
+
+/// Events emitted by a long-running widget worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeEvent {
+    Started { widget_id: String },
+    Frame(RuntimeFrame),
+    Error { widget_id: String, message: String },
+    Stopped { widget_id: String },
+}
+
+/// Handle used by daemon/frontends to stop one widget worker cleanly.
+pub struct WidgetRuntimeHandle {
+    stop_tx: std::sync::mpsc::Sender<()>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl WidgetRuntimeHandle {
+    pub fn stop(mut self) -> anyhow::Result<()> {
+        let _ = self.stop_tx.send(());
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| anyhow::anyhow!("widget runtime thread panicked"))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WidgetRuntimeHandle {
+    fn drop(&mut self) {
+        let _ = self.stop_tx.send(());
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+/// Execute one renderer-neutral frame for a shell widget.
+pub fn execute_widget_frame(widget: &WidgetConfig) -> anyhow::Result<RuntimeFrame> {
+    validate_runtime_widget(widget)?;
+    let output = run_shell_command_once(&widget.source)?;
+    let mut text = output.stdout;
+
+    if widget.source.show_stderr && !output.stderr.is_empty() {
+        if !text.ends_with('\n') && !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&output.stderr);
+    }
+
+    if output.timed_out {
+        if !text.ends_with('\n') && !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&format!(
+            "neodash: warning: command exceeded timeout after {:?}",
+            output.elapsed
+        ));
+    }
+
+    if let Some(code) = output.status_code.filter(|code| *code != 0) {
+        if !text.ends_with('\n') && !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&format!(
+            "neodash: warning: command exited with status code {code}"
+        ));
+    }
+
+    if text.trim().is_empty() {
+        text = "NeoDash command produced no output".to_string();
+    }
+
+    Ok(RuntimeFrame {
+        widget_id: widget.id.0.clone(),
+        text,
+        status_code: output.status_code,
+        timed_out: output.timed_out,
+    })
+}
+
+/// Spawn a cancellable worker which owns refresh timing and emits events.
+pub fn spawn_widget_runtime(
+    widget: WidgetConfig,
+) -> anyhow::Result<(WidgetRuntimeHandle, std::sync::mpsc::Receiver<RuntimeEvent>)> {
+    validate_runtime_widget(&widget)?;
+
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let widget_id = widget.id.0.clone();
+
+    let join = std::thread::Builder::new()
+        .name(format!("neodash-widget-{widget_id}"))
+        .spawn(move || {
+            let _ = event_tx.send(RuntimeEvent::Started {
+                widget_id: widget_id.clone(),
+            });
+
+            loop {
+                match execute_widget_frame(&widget) {
+                    Ok(frame) => {
+                        if event_tx.send(RuntimeEvent::Frame(frame)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if event_tx
+                            .send(RuntimeEvent::Error {
+                                widget_id: widget_id.clone(),
+                                message: format!("{error:#}"),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                let interval = Duration::from_millis(widget.source.interval_ms.max(1));
+                match stop_rx.recv_timeout(interval) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+
+            let _ = event_tx.send(RuntimeEvent::Stopped { widget_id });
+        })?;
+
+    Ok((
+        WidgetRuntimeHandle {
+            stop_tx,
+            join: Some(join),
+        },
+        event_rx,
+    ))
+}
+
+fn validate_runtime_widget(widget: &WidgetConfig) -> anyhow::Result<()> {
+    anyhow::ensure!(widget.enabled, "widget '{}' is disabled", widget.name);
+    anyhow::ensure!(
+        widget.widget_type == WidgetType::Shell,
+        "runtime event stream currently supports only shell widgets; '{}' is {:?}",
+        widget.name,
+        widget.widget_type
+    );
+    anyhow::ensure!(
+        widget
+            .source
+            .command
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        "shell widget '{}' is missing a non-empty [source].command",
+        widget.name
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

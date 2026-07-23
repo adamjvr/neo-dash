@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+clap.workspace = true
+neodash-runtime = { path = "../neodash-runtime" }
 anyhow.workspace = true
 neodash-core = { path = "../neodash-core" }
 neodash-exec = { path = "../neodash-exec" }

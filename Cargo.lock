@@ -3600,9 +3600,11 @@ name = "neodash-daemon"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "clap",
  "neodash-core",
  "neodash-exec",
  "neodash-platform",
+ "neodash-runtime",
  "tracing",
  "tracing-subscriber",
 ]
