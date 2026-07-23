@@ -23,3 +23,14 @@ cargo run -p neodash-daemon -- \
 The next phase replaces the GTK-local timeout loop with this event receiver and
 then gives the COSMIC host the same adapter. No GTK or libcosmic type is allowed
 inside `neodash-runtime`.
+
+## GTK adapter status
+
+The GTK frontend now consumes `RuntimeEvent` values from `neodash-runtime`.
+GTK no longer calls `run_shell_command_once`, formats command warnings, or uses
+`source.interval_ms` to schedule executions. Its short GLib timer only drains
+frames already produced by the runtime worker and applies them on the GTK main
+thread.
+
+The next frontend phase gives the native libcosmic host the same runtime adapter.
+

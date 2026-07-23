@@ -25,7 +25,6 @@ adw = { workspace = true, optional = true }
 gtk4-layer-shell = { workspace = true, optional = true }
 x11rb = { version = "0.13", optional = true }
 neodash-core = { path = "../neodash-core" }
-neodash-exec = { path = "../neodash-exec" }
 neodash-platform = { path = "../neodash-platform" }
 neodash-runtime = { path = "../neodash-runtime" }
 tracing.workspace = true

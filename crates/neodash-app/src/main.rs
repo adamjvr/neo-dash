@@ -79,9 +79,10 @@ mod gui {
         resolve_profile_selector, validate_profile, GeometryConfig, LoadedProfile,
         ProfileValidationSeverity, WidgetConfig, WidgetType,
     };
-    use neodash_exec::run_shell_command_once;
     use neodash_platform::detect_backend_from_env;
-    use neodash_runtime::load_widget_from_path;
+    use neodash_runtime::{
+        load_widget_from_path, spawn_widget_runtime, RuntimeEvent, WidgetRuntimeHandle,
+    };
     use std::{cell::RefCell, path::PathBuf, rc::Rc, time::Duration};
 
     /// Command line arguments for the graphical NeoDash widget preview.
@@ -443,25 +444,7 @@ mod gui {
 
         schedule_desktop_hints(options.desktop_hints, window_title, widget.geometry.clone());
 
-        let label = Rc::new(label);
-        let last_output = Rc::new(RefCell::new(String::new()));
-
-        refresh_label_once(
-            Rc::clone(&widget),
-            Rc::clone(&label),
-            Rc::clone(&last_output),
-        );
-
-        let interval_ms = widget.source.interval_ms.max(1);
-
-        glib::timeout_add_local(Duration::from_millis(interval_ms), move || {
-            refresh_label_once(
-                Rc::clone(&widget),
-                Rc::clone(&label),
-                Rc::clone(&last_output),
-            );
-            glib::ControlFlow::Continue
-        });
+        attach_runtime_stream(&window, &label, widget.as_ref().clone());
     }
 
     /// Apply desktop-widget behavior after GTK has had a moment to realize/map
@@ -543,59 +526,90 @@ mod gui {
         window.add_controller(controller);
     }
 
-    /// Run one command frame and update the visible label.
-    fn refresh_label_once(
-        widget: Rc<WidgetConfig>,
-        label: Rc<gtk::Label>,
-        last_output: Rc<RefCell<String>>,
+    /// Attach one renderer-neutral runtime stream to a GTK label.
+    ///
+    /// `neodash-runtime` owns command execution, normalization, refresh timing,
+    /// and cancellation. GTK only drains the event receiver on its main loop and
+    /// translates frames into label updates.
+    fn attach_runtime_stream(
+        window: &gtk::ApplicationWindow,
+        label: &gtk::Label,
+        widget: WidgetConfig,
     ) {
-        let text = match run_shell_command_once(&widget.source) {
-            Ok(output) => {
-                let mut text = output.stdout;
-
-                if widget.source.show_stderr && !output.stderr.is_empty() {
-                    push_newline_if_needed(&mut text);
-                    text.push_str(&output.stderr);
-                }
-
-                if output.timed_out {
-                    push_newline_if_needed(&mut text);
-                    text.push_str(&format!(
-                        "neodash: warning: command exceeded timeout after {:?}",
-                        output.elapsed
-                    ));
-                }
-
-                if let Some(code) = output.status_code {
-                    if code != 0 {
-                        push_newline_if_needed(&mut text);
-                        text.push_str(&format!(
-                            "neodash: warning: command exited with status code {code}"
-                        ));
-                    }
-                }
-
-                if text.trim().is_empty() {
-                    "NeoDash command produced no output".to_string()
-                } else {
-                    text
-                }
+        let widget_id = widget.id.0.clone();
+        let (handle, events) = match spawn_widget_runtime(widget) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let message = format!("NeoDash runtime startup error:\n{error:#}");
+                label.set_text(&message);
+                tracing::error!(%widget_id, error = %error, "failed to start GTK widget runtime");
+                return;
             }
-            Err(error) => format!("NeoDash command error:\n{error:#}"),
         };
 
-        let mut previous = last_output.borrow_mut();
+        let runtime = Rc::new(RefCell::new(Some(handle)));
+        let weak_label = label.downgrade();
+        let runtime_for_poll = Rc::clone(&runtime);
 
-        if *previous != text {
-            label.set_text(&text);
-            *previous = text;
-        }
+        // This is an event-delivery poll, not the widget refresh schedule. The
+        // worker in neodash-runtime sleeps for source.interval_ms and executes the
+        // command. GTK merely keeps UI delivery responsive.
+        glib::timeout_add_local(Duration::from_millis(16), move || {
+            let Some(label) = weak_label.upgrade() else {
+                stop_runtime_in_background(&runtime_for_poll);
+                return glib::ControlFlow::Break;
+            };
+
+            loop {
+                match events.try_recv() {
+                    Ok(RuntimeEvent::Started { widget_id }) => {
+                        tracing::info!(%widget_id, "GTK widget runtime started");
+                    }
+                    Ok(RuntimeEvent::Frame(frame)) => {
+                        if label.text().as_str() != frame.text.as_str() {
+                            label.set_text(&frame.text);
+                        }
+                    }
+                    Ok(RuntimeEvent::Error { widget_id, message }) => {
+                        tracing::warn!(%widget_id, %message, "GTK widget runtime error");
+                        label.set_text(&format!("NeoDash runtime error:\n{message}"));
+                    }
+                    Ok(RuntimeEvent::Stopped { widget_id }) => {
+                        tracing::info!(%widget_id, "GTK widget runtime stopped");
+                        stop_runtime_in_background(&runtime_for_poll);
+                        return glib::ControlFlow::Break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        stop_runtime_in_background(&runtime_for_poll);
+                        return glib::ControlFlow::Break;
+                    }
+                }
+            }
+
+            glib::ControlFlow::Continue
+        });
+
+        let runtime_for_close = Rc::clone(&runtime);
+        window.connect_close_request(move |_| {
+            stop_runtime_in_background(&runtime_for_close);
+            glib::Propagation::Proceed
+        });
     }
 
-    fn push_newline_if_needed(text: &mut String) {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
+    /// Stop and join a widget worker without blocking the GTK main loop.
+    fn stop_runtime_in_background(runtime: &Rc<RefCell<Option<WidgetRuntimeHandle>>>) {
+        let Some(handle) = runtime.borrow_mut().take() else {
+            return;
+        };
+
+        let _ = std::thread::Builder::new()
+            .name("neodash-gtk-runtime-stop".to_string())
+            .spawn(move || {
+                if let Err(error) = handle.stop() {
+                    tracing::warn!(error = %error, "failed to stop GTK widget runtime cleanly");
+                }
+            });
     }
 
     /// Install minimal CSS generated from `StyleConfig`.

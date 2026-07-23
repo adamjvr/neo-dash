@@ -110,6 +110,7 @@ Implemented in this starter:
 - Daemon crate skeleton
 - CLI crate skeleton
 - Headless runtime crate for one-shot and watched shell widgets
+- GTK widget windows consume the shared daemon/runtime event stream
 - App/GUI crate skeleton
 - Optional GUI dependencies so the default workspace stays headless-buildable
 - Headless check script and GitHub Actions CI
