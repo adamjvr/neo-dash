@@ -34,3 +34,15 @@ thread.
 
 The next frontend phase gives the native libcosmic host the same runtime adapter.
 
+## COSMIC adapter status
+
+The native libcosmic frontend now consumes the same `RuntimeEvent` stream as the
+GTK frontend. It supports profile, explicit widget-file, and widget-directory
+loading. Its short iced subscription only drains already-produced events; command
+execution, output normalization, refresh intervals, and cancellation remain in
+`neodash-runtime`.
+
+The adapter is exercised locally with `cosmic-winit` and compiled continuously
+with `cosmic-wayland`. Desktop-layer surfaces under `cosmic-comp` remain a later
+platform-integration phase.
+

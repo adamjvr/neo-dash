@@ -21,5 +21,8 @@ cosmic-wayland = ["dep:cosmic", "cosmic/wayland", "cosmic/tokio", "cosmic/wgpu"]
 
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
+neodash-core = { path = "../neodash-core" }
+neodash-runtime = { path = "../neodash-runtime" }
 neodash-platform = { path = "../neodash-platform" }
 cosmic = { package = "libcosmic", git = "https://github.com/pop-os/libcosmic.git", optional = true, default-features = false }

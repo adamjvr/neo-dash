@@ -3590,8 +3590,11 @@ name = "neodash-cosmic"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "clap",
  "libcosmic",
+ "neodash-core",
  "neodash-platform",
+ "neodash-runtime",
 ]
 
 [[package]]

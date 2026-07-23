@@ -80,3 +80,25 @@ New user-facing functionality should be divided into:
 
 Do not duplicate scheduling, profile parsing, command execution, or persistence in
 either frontend.
+
+## Shared runtime parity
+
+Both graphical hosts now consume `neodash-runtime` events:
+
+- GTK drains events on the GLib main loop.
+- libcosmic drains events through an iced subscription.
+- neither frontend executes shell commands directly.
+- each widget keeps its independent runtime-owned refresh interval.
+
+Local COSMIC runtime test:
+
+```bash
+cargo run -p neodash-cosmic --features cosmic-winit -- --profile default
+```
+
+Native target compile test:
+
+```bash
+cargo check -p neodash-cosmic --features cosmic-wayland
+```
+
