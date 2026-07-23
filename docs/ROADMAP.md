@@ -78,3 +78,14 @@ Next:
 - Profile lookup by name.
 - Duplicate widget ID validation.
 - Daemon-owned profile state.
+
+
+## Current validation status
+
+Profile validation is now shared through `neodash-core`. The CLI exposes it via:
+
+```bash
+cargo run -p neodash-cli -- profile-check examples/profiles/default.toml
+```
+
+The GTK app uses the same validation before launching a profile.

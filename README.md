@@ -216,3 +216,14 @@ cargo run -p neodash-cli -- profile-info examples/profiles/default.toml
 
 Profile parsing and profile-relative path resolution are shared through
 `neodash-core`; see `docs/PROFILE_MODEL.md` for details.
+
+
+## Profile validation
+
+Validate a profile before launching it:
+
+```bash
+cargo run -p neodash-cli -- profile-check examples/profiles/default.toml
+```
+
+The GTK app also validates profile launches before opening windows.

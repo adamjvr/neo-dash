@@ -89,3 +89,14 @@ from a simple profile name like:
 ```bash
 neodash profile-info default
 ```
+
+
+## Validation
+
+Profile validation now lives in `neodash-core` alongside the shared profile model. Use:
+
+```bash
+cargo run -p neodash-cli -- profile-check examples/profiles/default.toml
+```
+
+See `docs/PROFILE_VALIDATION.md` for details.

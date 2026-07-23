@@ -2,7 +2,8 @@
 
 use clap::{Parser, Subcommand};
 use neodash_core::{
-    collect_profile_widget_paths, load_profile_from_path, SourceConfig, WidgetConfig, WidgetId,
+    collect_profile_widget_paths, load_profile_from_path, validate_profile, LoadedProfile,
+    ProfileValidationReport, ProfileValidationSeverity, SourceConfig, WidgetConfig, WidgetId,
     WidgetType,
 };
 use neodash_platform::detect_backend_from_env;
@@ -64,11 +65,67 @@ enum Commands {
         path: PathBuf,
     },
 
+    /// Validate a NeoDash profile and every widget file it references.
+    ProfileCheck {
+        /// Path to a profile TOML file, for example examples/profiles/default.toml.
+        path: PathBuf,
+    },
+
     /// Print the backend NeoDash would probably use in this session.
     Backend,
 
     /// Print an example widget TOML config.
     ExampleWidget,
+}
+
+fn print_profile_validation_report(loaded: &LoadedProfile, report: &ProfileValidationReport) {
+    println!("Profile file: {}", loaded.path.display());
+    println!(
+        "Profile id: {}",
+        loaded.profile.id.as_deref().unwrap_or("<unnamed>")
+    );
+    println!(
+        "Profile name: {}",
+        loaded.profile.name.as_deref().unwrap_or("<unnamed>")
+    );
+    println!("Widget files: {}", report.widget_paths.len());
+    println!(
+        "Issues: {} error(s), {} warning(s)",
+        report.error_count(),
+        report.warning_count()
+    );
+
+    if report.issues.is_empty() {
+        println!("Profile OK");
+        return;
+    }
+
+    for issue in &report.issues {
+        let severity = match issue.severity {
+            ProfileValidationSeverity::Warning => "warning",
+            ProfileValidationSeverity::Error => "error",
+        };
+
+        match (&issue.path, &issue.widget_id) {
+            (Some(path), Some(widget_id)) => {
+                println!(
+                    "  {severity}: {} [{}]: {}",
+                    path.display(),
+                    widget_id,
+                    issue.message
+                );
+            }
+            (Some(path), None) => {
+                println!("  {severity}: {}: {}", path.display(), issue.message);
+            }
+            (None, Some(widget_id)) => {
+                println!("  {severity}: [{widget_id}]: {}", issue.message);
+            }
+            (None, None) => {
+                println!("  {severity}: {}", issue.message);
+            }
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -143,6 +200,20 @@ fn main() -> anyhow::Result<()> {
 
             for path in widget_paths {
                 println!("  {}", path.display());
+            }
+        }
+        Commands::ProfileCheck { path } => {
+            let loaded = load_profile_from_path(&path)?;
+            let report = validate_profile(&loaded)?;
+
+            print_profile_validation_report(&loaded, &report);
+
+            if report.has_errors() {
+                anyhow::bail!(
+                    "profile validation failed with {} error(s) and {} warning(s)",
+                    report.error_count(),
+                    report.warning_count()
+                );
             }
         }
         Commands::Backend => {

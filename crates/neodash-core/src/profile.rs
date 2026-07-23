@@ -1,28 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Shared profile model and profile path resolution.
+//! Shared profile model, profile path resolution, and profile validation.
 //!
 //! Profiles describe which widget files make up a dashboard. Keep this model in
 //! `neodash-core` so the CLI, daemon, GTK app, and future editor all agree on
-//! the same profile format and relative-path behavior.
+//! the same profile format, relative-path behavior, and validation rules.
 
+use crate::{config::load_widget_from_toml_str, model::WidgetType};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
 
 /// A NeoDash dashboard profile.
-///
-/// This first shared profile model is intentionally small. It captures the
-/// pieces the app already needs:
-///
-/// - explicit widget TOML files
-/// - direct-child widget TOML directories
-/// - optional default desktop-hints behavior
-///
-/// Themes, per-widget overrides, monitor rules, and profile inheritance should
-/// be added after the basic runtime path is stable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileConfig {
     /// Stable profile identifier, such as `default`.
@@ -32,23 +24,14 @@ pub struct ProfileConfig {
     pub name: Option<String>,
 
     /// Explicit widget TOML file paths.
-    ///
-    /// Relative paths are resolved relative to the profile file's parent
-    /// directory by `collect_profile_widget_paths`.
     #[serde(default)]
     pub widgets: Vec<PathBuf>,
 
     /// Direct child directories containing widget TOML files.
-    ///
-    /// Directory loading is intentionally non-recursive for now. Recursive
-    /// loading should wait until widget-pack layout rules are defined.
     #[serde(default)]
     pub widget_dirs: Vec<PathBuf>,
 
     /// Optional default desktop-hints behavior for graphical launches.
-    ///
-    /// The CLI or app may still override this. The profile only provides the
-    /// user's preferred default for this dashboard.
     #[serde(default)]
     pub desktop_hints: Option<bool>,
 }
@@ -64,6 +47,93 @@ pub struct LoadedProfile {
 
     /// Parsed profile data.
     pub profile: ProfileConfig,
+}
+
+/// Severity for a profile validation issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileValidationSeverity {
+    Warning,
+    Error,
+}
+
+impl ProfileValidationSeverity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One validation issue found while checking a profile and its widgets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileValidationIssue {
+    pub severity: ProfileValidationSeverity,
+    pub message: String,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub widget_id: Option<String>,
+}
+
+impl ProfileValidationIssue {
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self {
+            severity: ProfileValidationSeverity::Warning,
+            message: message.into(),
+            path: None,
+            widget_id: None,
+        }
+    }
+
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            severity: ProfileValidationSeverity::Error,
+            message: message.into(),
+            path: None,
+            widget_id: None,
+        }
+    }
+
+    pub fn with_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    pub fn with_widget_id(mut self, widget_id: impl Into<String>) -> Self {
+        self.widget_id = Some(widget_id.into());
+        self
+    }
+}
+
+/// Result of validating a loaded profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileValidationReport {
+    pub widget_paths: Vec<PathBuf>,
+    pub issues: Vec<ProfileValidationIssue>,
+}
+
+impl ProfileValidationReport {
+    pub fn has_errors(&self) -> bool {
+        self.issues
+            .iter()
+            .any(|issue| issue.severity == ProfileValidationSeverity::Error)
+    }
+
+    pub fn error_count(&self) -> usize {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == ProfileValidationSeverity::Error)
+            .count()
+    }
+
+    pub fn warning_count(&self) -> usize {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == ProfileValidationSeverity::Warning)
+            .count()
+    }
 }
 
 /// Parse a profile TOML string without filesystem context.
@@ -90,11 +160,6 @@ pub fn load_profile_from_path(path: impl AsRef<Path>) -> anyhow::Result<LoadedPr
 }
 
 /// Resolve a profile-relative path.
-///
-/// Absolute paths are returned unchanged. Relative paths are joined to the
-/// profile file's parent directory. This function intentionally does not
-/// canonicalize paths because users may point at files that do not exist yet
-/// while editing a profile.
 pub fn resolve_profile_path(base_dir: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -104,12 +169,6 @@ pub fn resolve_profile_path(base_dir: &Path, path: &Path) -> PathBuf {
 }
 
 /// Collect all widget TOML files referenced by a loaded profile.
-///
-/// Loading order:
-///
-/// 1. Explicit `widgets`, in profile order.
-/// 2. Direct child TOML files from each `widget_dirs` entry, sorted per
-///    directory for deterministic startup behavior.
 pub fn collect_profile_widget_paths(profile: &LoadedProfile) -> anyhow::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
 
@@ -125,10 +184,162 @@ pub fn collect_profile_widget_paths(profile: &LoadedProfile) -> anyhow::Result<V
     Ok(paths)
 }
 
+/// Validate a loaded profile and the widget files it references.
+pub fn validate_profile(profile: &LoadedProfile) -> anyhow::Result<ProfileValidationReport> {
+    let mut report = ProfileValidationReport::default();
+    let mut seen_widget_ids: HashMap<String, PathBuf> = HashMap::new();
+
+    for widget in &profile.profile.widgets {
+        report
+            .widget_paths
+            .push(resolve_profile_path(&profile.base_dir, widget));
+    }
+
+    for dir in &profile.profile.widget_dirs {
+        let dir = resolve_profile_path(&profile.base_dir, dir);
+
+        if !dir.exists() {
+            report.issues.push(
+                ProfileValidationIssue::error("widget directory does not exist").with_path(dir),
+            );
+            continue;
+        }
+
+        if !dir.is_dir() {
+            report.issues.push(
+                ProfileValidationIssue::error("widget directory path is not a directory")
+                    .with_path(dir),
+            );
+            continue;
+        }
+
+        match discover_widget_paths(&dir) {
+            Ok(mut paths) => report.widget_paths.append(&mut paths),
+            Err(error) => report.issues.push(
+                ProfileValidationIssue::error(format!("failed to read widget directory: {error}"))
+                    .with_path(dir),
+            ),
+        }
+    }
+
+    if report.widget_paths.is_empty() {
+        report.issues.push(ProfileValidationIssue::error(
+            "profile does not reference any widget files",
+        ));
+    }
+
+    for path in report.widget_paths.clone() {
+        validate_widget_path(&path, &mut seen_widget_ids, &mut report);
+    }
+
+    Ok(report)
+}
+
+fn validate_widget_path(
+    path: &Path,
+    seen_widget_ids: &mut HashMap<String, PathBuf>,
+    report: &mut ProfileValidationReport,
+) {
+    if !path.exists() {
+        report
+            .issues
+            .push(ProfileValidationIssue::error("widget file does not exist").with_path(path));
+        return;
+    }
+
+    if !path.is_file() {
+        report
+            .issues
+            .push(ProfileValidationIssue::error("widget path is not a file").with_path(path));
+        return;
+    }
+
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) => {
+            report.issues.push(
+                ProfileValidationIssue::error(format!("failed to read widget file: {error}"))
+                    .with_path(path),
+            );
+            return;
+        }
+    };
+
+    let widget = match load_widget_from_toml_str(&text) {
+        Ok(widget) => widget,
+        Err(error) => {
+            report.issues.push(
+                ProfileValidationIssue::error(format!("failed to parse widget TOML: {error}"))
+                    .with_path(path),
+            );
+            return;
+        }
+    };
+
+    let widget_id = widget.id.0.clone();
+
+    if let Some(first_path) = seen_widget_ids.insert(widget_id.clone(), path.to_path_buf()) {
+        report.issues.push(
+            ProfileValidationIssue::error(format!(
+                "duplicate widget id also used by {}",
+                first_path.display()
+            ))
+            .with_path(path)
+            .with_widget_id(widget_id.clone()),
+        );
+    }
+
+    if !widget.enabled {
+        report.issues.push(
+            ProfileValidationIssue::warning("widget is disabled and will not be launched")
+                .with_path(path)
+                .with_widget_id(widget_id.clone()),
+        );
+    }
+
+    if widget.enabled && widget.widget_type != WidgetType::Shell {
+        report.issues.push(
+            ProfileValidationIssue::error(format!(
+                "enabled widget type {:?} is not supported by the current profile runtime",
+                widget.widget_type
+            ))
+            .with_path(path)
+            .with_widget_id(widget_id.clone()),
+        );
+    }
+
+    if widget.widget_type == WidgetType::Shell
+        && widget
+            .source
+            .command
+            .as_deref()
+            .is_none_or(|command| command.trim().is_empty())
+    {
+        report.issues.push(
+            ProfileValidationIssue::error("shell widget is missing a non-empty source.command")
+                .with_path(path)
+                .with_widget_id(widget_id.clone()),
+        );
+    }
+
+    if widget.geometry.width <= 0 || widget.geometry.height <= 0 {
+        report.issues.push(
+            ProfileValidationIssue::error("widget geometry width and height must be positive")
+                .with_path(path)
+                .with_widget_id(widget_id.clone()),
+        );
+    }
+
+    if widget.source.interval_ms == 0 {
+        report.issues.push(
+            ProfileValidationIssue::warning("widget interval_ms is 0; runtime will clamp it")
+                .with_path(path)
+                .with_widget_id(widget_id),
+        );
+    }
+}
+
 /// Discover direct-child TOML files in a widget directory.
-///
-/// This is shared so the app, CLI, and future daemon apply the same directory
-/// loading rule.
 pub fn discover_widget_paths(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
 
@@ -158,6 +369,7 @@ pub fn discover_widget_paths(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_profile_with_defaults() {
@@ -212,5 +424,85 @@ id = "empty"
         let absolute = Path::new("/tmp/neodash/widget.toml");
 
         assert_eq!(resolve_profile_path(base, absolute), absolute);
+    }
+
+    #[test]
+    fn validation_reports_duplicate_widget_ids() {
+        let temp = make_temp_dir("duplicate-widget-ids");
+        let widgets = temp.join("widgets");
+        fs::create_dir_all(&widgets).expect("temp widgets dir should be created");
+
+        fs::write(widgets.join("one.toml"), widget_toml("duplicate-id"))
+            .expect("first widget should write");
+        fs::write(widgets.join("two.toml"), widget_toml("duplicate-id"))
+            .expect("second widget should write");
+        fs::write(
+            temp.join("profile.toml"),
+            r#"
+id = "test"
+widget_dirs = ["widgets"]
+"#,
+        )
+        .expect("profile should write");
+
+        let loaded =
+            load_profile_from_path(temp.join("profile.toml")).expect("profile should load");
+        let report = validate_profile(&loaded).expect("validation should run");
+
+        assert!(report.has_errors());
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("duplicate widget id")));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn validation_reports_missing_widget_file() {
+        let temp = make_temp_dir("missing-widget-file");
+        fs::create_dir_all(&temp).expect("temp dir should be created");
+        fs::write(
+            temp.join("profile.toml"),
+            r#"
+id = "test"
+widgets = ["missing.toml"]
+"#,
+        )
+        .expect("profile should write");
+
+        let loaded =
+            load_profile_from_path(temp.join("profile.toml")).expect("profile should load");
+        let report = validate_profile(&loaded).expect("validation should run");
+
+        assert!(report.has_errors());
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("does not exist")));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    fn widget_toml(id: &str) -> String {
+        format!(
+            r#"
+id = "{id}"
+name = "Test Widget"
+type = "shell"
+enabled = true
+
+[source]
+command = "date"
+"#
+        )
+    }
+
+    fn make_temp_dir(name: &str) -> PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should work")
+            .as_millis();
+        std::env::temp_dir().join(format!("neodash-{name}-{}-{millis}", std::process::id()))
     }
 }

@@ -75,3 +75,15 @@ Implementation notes:
 - Keep explicit file paths working.
 - Add a resolver that treats bare names as profile IDs under the config dir.
 - Add tests before moving more runtime ownership into the daemon.
+
+
+## Current implementation target: daemon-owned profile runtime
+
+Profile parsing and validation are now shared in `neodash-core`. The next major phase is to make the daemon own a loaded, validated profile instead of keeping all runtime state inside `neodash-app`.
+
+Pre-daemon checks:
+
+```bash
+cargo run -p neodash-cli -- profile-check examples/profiles/default.toml
+cargo run -p neodash-app --features gui,x11-desktop -- --profile examples/profiles/default.toml --debug-frame
+```

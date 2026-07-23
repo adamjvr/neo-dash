@@ -76,7 +76,8 @@ mod gui {
     use gtk::prelude::*;
     use neodash_core::{
         collect_profile_widget_paths, discover_widget_paths, load_profile_from_path,
-        GeometryConfig, LoadedProfile, WidgetConfig, WidgetType,
+        validate_profile, GeometryConfig, LoadedProfile, ProfileValidationSeverity, WidgetConfig,
+        WidgetType,
     };
     use neodash_exec::run_shell_command_once;
     use neodash_platform::detect_backend_from_env;
@@ -179,6 +180,10 @@ mod gui {
             None => None,
         };
 
+        if let Some(loaded) = loaded_profile.as_ref() {
+            validate_loaded_profile(loaded)?;
+        }
+
         let profile_desktop_hints = loaded_profile
             .as_ref()
             .and_then(|loaded| loaded.profile.desktop_hints)
@@ -234,6 +239,45 @@ mod gui {
         // called. Clap already parsed NeoDash-specific arguments above, so the
         // real argv would make GTK complain about options like `--widget`.
         app.run_with_args::<&str>(&["neodash-app"]);
+
+        Ok(())
+    }
+
+    /// Validate a loaded profile before the GTK app opens windows.
+    fn validate_loaded_profile(loaded: &LoadedProfile) -> anyhow::Result<()> {
+        let report = validate_profile(loaded)?;
+
+        for issue in &report.issues {
+            let path = issue
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<profile>".to_string());
+            let widget_id = issue.widget_id.as_deref().unwrap_or("<none>");
+
+            match issue.severity {
+                ProfileValidationSeverity::Warning => tracing::warn!(
+                    path = %path,
+                    widget_id = widget_id,
+                    message = %issue.message,
+                    "profile validation warning"
+                ),
+                ProfileValidationSeverity::Error => tracing::error!(
+                    path = %path,
+                    widget_id = widget_id,
+                    message = %issue.message,
+                    "profile validation error"
+                ),
+            }
+        }
+
+        anyhow::ensure!(
+            !report.has_errors(),
+            "profile {} failed validation with {} error(s) and {} warning(s)",
+            loaded.path.display(),
+            report.error_count(),
+            report.warning_count()
+        );
 
         Ok(())
     }
